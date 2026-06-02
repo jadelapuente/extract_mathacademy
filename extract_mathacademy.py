@@ -3,6 +3,9 @@
 Extract questions, prose, and math notation from Math Academy lesson HTML,
 stripping presentational markup and recovering LaTeX.
 
+The output is optimized for LLM consumption: compact single-line LaTeX and a
+stable structure (Markdown or JSON).
+
 Patterns exploited
 -------------------
 1. Each lesson chunk is a  <div class="step" steptype="tutorial|example">.
@@ -19,13 +22,20 @@ Patterns exploited
 
 Usage
 -----
-    python extract_mathacademy.py lesson.html            # markdown to stdout
-    python extract_mathacademy.py lesson.html --json      # structured JSON
-    cat lesson.html | python extract_mathacademy.py       # stdin also works
+    python extract_mathacademy.py lesson.html              # writes lesson.md
+    python extract_mathacademy.py lesson.html --format json # writes lesson.json
+    python extract_mathacademy.py lesson.html -o out.md     # explicit output path
+    cat lesson.html | python extract_mathacademy.py
 """
+from __future__ import annotations
+
+import argparse
+import json
 import re
 import sys
-import json
+from pathlib import Path
+from typing import Any
+
 from bs4 import BeautifulSoup, NavigableString, Tag
 
 # --------------------------------------------------------------------------- #
@@ -33,15 +43,15 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 # --------------------------------------------------------------------------- #
 
 _OPS = {
-    "\u2212": "-",          # minus sign
-    "\u22c5": " \\cdot ",   # dot operator
-    "\u00d7": " \\times ",
-    "\u00b1": " \\pm ",
-    "\u2713": " \\checkmark ",
-    "\u221e": "\\infty",
-    "\u2264": " \\le ",
-    "\u2265": " \\ge ",
-    "\u2260": " \\ne ",
+    "−": "-",          # minus sign
+    "⋅": " \\cdot ",   # dot operator
+    "×": " \\times ",
+    "±": " \\pm ",
+    "✓": " \\checkmark ",
+    "∞": "\\infty",
+    "≤": " \\le ",
+    "≥": " \\ge ",
+    "≠": " \\ne ",
 }
 
 
@@ -147,8 +157,18 @@ def conv_cell(mtd: Tag) -> str:
     return "".join(mathml_to_latex(c) for c in mtd.children).strip()
 
 
+def normalize_latex(latex: str) -> str:
+    """Collapse all whitespace runs to single spaces and trim.
+
+    LaTeX is whitespace-insensitive between tokens, so this is lossless for the
+    math while removing the newlines/indentation MathJax v3's MathML carries
+    over. Keeps formulas on one line, which is far cheaper for an LLM to read.
+    """
+    return re.sub(r"\s+", " ", latex).strip()
+
+
 # --------------------------------------------------------------------------- #
-# Span -> LaTeX                                                                #
+# Span -> LaTeX                                                               #
 # --------------------------------------------------------------------------- #
 
 def mjpage_to_latex(span: Tag) -> str:
@@ -160,14 +180,16 @@ def mjpage_to_latex(span: Tag) -> str:
     if math is not None:                       # MathJax v3: MathML in title
         latex = mathml_to_latex(math)
     else:                                      # MathJax v2: raw LaTeX in title
-        latex = re.sub(r"\s+", " ", title.get_text())
-    latex = latex.strip()
+        latex = title.get_text()
+    latex = normalize_latex(latex)
+    if not latex:
+        return ""
     is_block = "mjpage__block" in span.get("class", [])
     return f"\n$$ {latex} $$\n" if is_block else f"${latex}$"
 
 
 # --------------------------------------------------------------------------- #
-# DOM -> text                                                                  #
+# DOM -> text                                                                 #
 # --------------------------------------------------------------------------- #
 
 def node_text(node) -> str:
@@ -186,25 +208,31 @@ def node_text(node) -> str:
 
 
 def clean(s: str) -> str:
+    """Tidy a multi-paragraph block: trim lines, collapse blank-line runs."""
     s = s.replace("\xa0", " ")
     s = "\n".join(re.sub(r"[ \t]+", " ", ln).strip() for ln in s.splitlines())
     s = re.sub(r"\n{3,}", "\n\n", s)
     return s.strip()
 
 
+def clean_inline(s: str) -> str:
+    """Tidy a value that must stay on one line (e.g. a title)."""
+    return re.sub(r"\s+", " ", s.replace("\xa0", " ")).strip()
+
+
 # --------------------------------------------------------------------------- #
-# Extraction                                                                   #
+# Extraction                                                                  #
 # --------------------------------------------------------------------------- #
 
-def extract_steps(html: str):
+def extract_steps(html: str) -> list[dict[str, Any]]:
     soup = BeautifulSoup(html, "html.parser")
-    steps = []
+    steps: list[dict[str, Any]] = []
     for step in soup.select("div.step"):
         anchor = step.select_one(".stepName a.stepAnchor")
-        rec = {
+        rec: dict[str, Any] = {
             "id": step.get("stepid"),
             "type": step.get("steptype", ""),
-            "title": clean(node_text(anchor)) if anchor else "",
+            "title": clean_inline(node_text(anchor)) if anchor else "",
         }
         q = step.select_one(".exampleQuestion")
         e = step.select_one(".exampleExplanation")
@@ -218,7 +246,11 @@ def extract_steps(html: str):
     return steps
 
 
-def to_markdown(steps) -> str:
+# --------------------------------------------------------------------------- #
+# Rendering                                                                   #
+# --------------------------------------------------------------------------- #
+
+def to_markdown(steps: list[dict[str, Any]]) -> str:
     out = []
     for s in steps:
         out.append(f"## [{s['type']}] {s['title']}".rstrip())
@@ -232,16 +264,67 @@ def to_markdown(steps) -> str:
     return "\n\n".join(x for x in out if x).strip() + "\n"
 
 
-def main(argv):
-    args = [a for a in argv[1:] if not a.startswith("--")]
-    as_json = "--json" in argv
-    html = open(args[0], encoding="utf-8").read() if args else sys.stdin.read()
-    steps = extract_steps(html)
-    if as_json:
-        print(json.dumps(steps, indent=2, ensure_ascii=False))
+def to_json(steps: list[dict[str, Any]]) -> str:
+    return json.dumps(steps, indent=2, ensure_ascii=False) + "\n"
+
+
+# --------------------------------------------------------------------------- #
+# CLI                                                                         #
+# --------------------------------------------------------------------------- #
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        description="Extract Math Academy lesson content from HTML for LLM use.",
+    )
+    p.add_argument(
+        "input", nargs="?",
+        help="HTML file to read (omit to read from stdin).",
+    )
+    p.add_argument(
+        "--format", choices=["markdown", "json"], default="markdown",
+        help="Output format (default: markdown).",
+    )
+    p.add_argument(
+        "-o", "--output",
+        help="Output file path. Defaults to the input name with the format's "
+             "extension (.md or .json).",
+    )
+    return p
+
+
+def run(args: argparse.Namespace) -> int:
+    if args.input:
+        in_path = Path(args.input)
+        if not in_path.is_file():
+            print(f"error: input file not found: {args.input}", file=sys.stderr)
+            return 2
+        html = in_path.read_text(encoding="utf-8")
+        stem = in_path.with_suffix("")
     else:
-        print(to_markdown(steps))
+        html = sys.stdin.read()
+        stem = Path("lesson")
+
+    if not html.strip():
+        print("error: empty input", file=sys.stderr)
+        return 2
+
+    steps = extract_steps(html)
+    if not steps:
+        print("warning: no lesson steps found in input", file=sys.stderr)
+
+    text = to_json(steps) if args.format == "json" else to_markdown(steps)
+
+    ext = ".json" if args.format == "json" else ".md"
+    out_path = Path(args.output) if args.output else Path(str(stem) + ext)
+    out_path.write_text(text, encoding="utf-8")
+    print(f"wrote {len(steps)} steps -> {out_path}", file=sys.stderr)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _build_parser().parse_args(argv)
+    return run(args)
 
 
 if __name__ == "__main__":
-    main(sys.argv)
+    raise SystemExit(main())
