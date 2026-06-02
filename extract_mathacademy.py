@@ -26,6 +26,12 @@ Usage
     python extract_mathacademy.py lesson.html --format json # writes lesson.json
     python extract_mathacademy.py lesson.html -o out.md     # explicit output path
     cat lesson.html | python extract_mathacademy.py
+    python extract_mathacademy.py https://mathacademy.com/topics/285
+
+When given a URL, the script reads your existing Math Academy login from your
+browser's cookie store (no password needed -- just stay logged in in your
+browser) and fetches the page. Math Academy renders math server-side, so a
+plain HTTP fetch returns the same SVG the parser already understands.
 """
 from __future__ import annotations
 
@@ -35,6 +41,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
@@ -269,6 +276,62 @@ def to_json(steps: list[dict[str, Any]]) -> str:
 
 
 # --------------------------------------------------------------------------- #
+# Fetching (reuse the browser's existing Math Academy login)                  #
+# --------------------------------------------------------------------------- #
+
+MA_DOMAIN = "mathacademy.com"
+
+
+def _session_cookies():
+    """Read the Math Academy `session` cookie from whichever local browser
+    you're logged in with. Tries each in turn, skipping any that's locked or
+    unreadable (e.g. Safari's permission-gated cookie store)."""
+    import browser_cookie3 as bc3
+
+    for name in ("chrome", "brave", "edge", "firefox", "safari"):
+        try:
+            cj = getattr(bc3, name)(domain_name=MA_DOMAIN)
+        except Exception:                           # locked DB, no profile, etc.
+            continue
+        if any(c.name == "session" for c in cj):
+            return cj
+    raise SystemExit(
+        "Could not find a Math Academy session in any browser. "
+        "Log in at https://mathacademy.com, then run this again."
+    )
+
+
+def fetch_html(url: str) -> str:
+    import requests
+
+    r = requests.get(
+        url,
+        cookies=_session_cookies(),
+        headers={"User-Agent": "Mozilla/5.0"},
+        allow_redirects=True,
+        timeout=30,
+    )
+    # Bounced to a login/landing page => the session cookie is stale.
+    if "/login" in r.url or 'type="password"' in r.text.lower():
+        raise SystemExit(
+            f"Got redirected to {r.url} -- your Math Academy session looks "
+            "expired. Re-open mathacademy.com in your browser to refresh it."
+        )
+    r.raise_for_status()
+    return r.text
+
+
+def _is_url(s: str) -> bool:
+    return s.startswith("http://") or s.startswith("https://")
+
+
+def _url_stem(url: str) -> Path:
+    """Derive an output filename stem from a URL, e.g. .../topics/285 -> 285."""
+    name = Path(urlparse(url).path.rstrip("/")).name
+    return Path(name or "lesson")
+
+
+# --------------------------------------------------------------------------- #
 # CLI                                                                         #
 # --------------------------------------------------------------------------- #
 
@@ -278,7 +341,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "input", nargs="?",
-        help="HTML file to read (omit to read from stdin).",
+        help="HTML file to read, or a mathacademy.com URL to fetch using your "
+             "browser's existing login (omit to read from stdin).",
     )
     p.add_argument(
         "--format", choices=["markdown", "json"], default="markdown",
@@ -293,7 +357,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace) -> int:
-    if args.input:
+    if args.input and _is_url(args.input):
+        html = fetch_html(args.input)
+        stem = _url_stem(args.input)
+    elif args.input:
         in_path = Path(args.input)
         if not in_path.is_file():
             print(f"error: input file not found: {args.input}", file=sys.stderr)
