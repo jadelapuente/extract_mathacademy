@@ -22,16 +22,24 @@ Patterns exploited
 
 Usage
 -----
-    python extract_mathacademy.py lesson.html              # writes lesson.md
-    python extract_mathacademy.py lesson.html --format json # writes lesson.json
-    python extract_mathacademy.py lesson.html -o out.md     # explicit output path
-    cat lesson.html | python extract_mathacademy.py
     python extract_mathacademy.py https://mathacademy.com/topics/285
+    python extract_mathacademy.py https://mathacademy.com/topics/285 --format json
+    python extract_mathacademy.py lesson.html        # local file also works
+    cat lesson.html | python extract_mathacademy.py  # stdin too
 
 When given a URL, the script reads your existing Math Academy login from your
 browser's cookie store (no password needed -- just stay logged in in your
 browser) and fetches the page. Math Academy renders math server-side, so a
 plain HTTP fetch returns the same SVG the parser already understands.
+
+Output is a self-contained per-lesson folder named after the lesson title:
+
+    inverses-of-quadratic-functions/
+        inverses-of-quadratic-functions.md
+        images/<downloaded graphics>
+
+Pass --out-dir to choose where that folder is created, or -o for an explicit
+output file path.
 """
 from __future__ import annotations
 
@@ -41,7 +49,7 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
@@ -209,6 +217,10 @@ def node_text(node) -> str:
     cls = node.get("class", [])
     if node.name == "span" and "mjpage" in cls:
         return mjpage_to_latex(node)
+    if node.name == "img":
+        src = node.get("src", "")
+        alt = (node.get("alt") or "").strip()
+        return f"![{alt}]({src})" if src else ""
     if "helpButton" in cls or "explanationHeader" in cls:
         return ""
     return "".join(node_text(c) for c in node.children)
@@ -247,18 +259,39 @@ def extract_steps(html: str) -> list[dict[str, Any]]:
             rec["question"] = clean(node_text(q)) if q else ""
             rec["explanation"] = clean(node_text(e)) if e else ""
         else:
-            paras = [clean(node_text(p)) for p in step.find_all("p")]
-            rec["body"] = "\n\n".join(p for p in paras if p)
+            parts = []
+            for node in step.find_all(["p", "img"]):
+                if node.name == "img" and node.find_parent("p"):
+                    continue  # already rendered inline by its paragraph
+                t = clean(node_text(node))
+                if t:
+                    parts.append(t)
+            rec["body"] = "\n\n".join(parts)
         steps.append(rec)
     return steps
+
+
+def extract_title(html: str) -> str | None:
+    """The lesson's human title, from the page's #topicName element."""
+    el = BeautifulSoup(html, "html.parser").select_one("#topicName")
+    title = clean_inline(el.get_text()) if el else ""
+    return title or None
+
+
+def slugify(text: str) -> str:
+    """Filesystem-safe slug, e.g. 'Inverses of Quadratic Functions' ->
+    'inverses-of-quadratic-functions'."""
+    s = re.sub(r"[^\w\s-]", "", text.lower())
+    s = re.sub(r"[\s_-]+", "-", s).strip("-")
+    return s or "lesson"
 
 
 # --------------------------------------------------------------------------- #
 # Rendering                                                                   #
 # --------------------------------------------------------------------------- #
 
-def to_markdown(steps: list[dict[str, Any]]) -> str:
-    out = []
+def to_markdown(steps: list[dict[str, Any]], title: str | None = None) -> str:
+    out = [f"# {title}"] if title else []
     for s in steps:
         out.append(f"## [{s['type']}] {s['title']}".rstrip())
         if "body" in s:
@@ -301,12 +334,12 @@ def _session_cookies():
     )
 
 
-def fetch_html(url: str) -> str:
+def fetch_html(url: str, cookies=None) -> str:
     import requests
 
     r = requests.get(
         url,
-        cookies=_session_cookies(),
+        cookies=cookies if cookies is not None else _session_cookies(),
         headers={"User-Agent": "Mozilla/5.0"},
         allow_redirects=True,
         timeout=30,
@@ -319,6 +352,47 @@ def fetch_html(url: str) -> str:
         )
     r.raise_for_status()
     return r.text
+
+
+# Content-Type -> file extension for the image formats Math Academy serves.
+_IMG_EXT = {
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/gif": ".gif",
+    "image/svg+xml": ".svg",
+    "image/webp": ".webp",
+}
+
+
+def _image_filename(src: str, content_type: str) -> str:
+    """Local filename for an image src: keep its own extension if it has one,
+    else append the one implied by the Content-Type (graphics srcs are
+    extensionless hashes like /graphics/<hash>)."""
+    p = Path(urlparse(src).path)
+    if p.suffix:
+        return p.name
+    ext = _IMG_EXT.get(content_type.split(";")[0].strip(), ".img")
+    return p.name + ext
+
+
+def download_images(srcs, base_url: str, out_dir: Path, cookies) -> dict[str, str]:
+    """Download each image src (resolved against base_url) into out_dir using
+    the session cookie. Returns {original_src: local_filename}."""
+    import requests
+
+    mapping: dict[str, str] = {}
+    for src in dict.fromkeys(srcs):                 # de-dup, keep order
+        r = requests.get(
+            urljoin(base_url, src),
+            cookies=cookies,
+            headers={"User-Agent": "Mozilla/5.0"},
+            timeout=30,
+        )
+        r.raise_for_status()
+        fname = _image_filename(src, r.headers.get("content-type", ""))
+        (out_dir / fname).write_bytes(r.content)
+        mapping[src] = fname
+    return mapping
 
 
 def _is_url(s: str) -> bool:
@@ -350,26 +424,39 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "-o", "--output",
-        help="Output file path. Defaults to the input name with the format's "
-             "extension (.md or .json).",
+        help="Explicit output file path. Overrides the default per-lesson "
+             "folder; images are written to a sibling images/ directory.",
+    )
+    p.add_argument(
+        "--out-dir", default=".",
+        help="Root directory under which the per-lesson folder is created "
+             "(default: current directory).",
+    )
+    p.add_argument(
+        "--no-images", action="store_true",
+        help="Don't download lesson images (URL input only).",
     )
     return p
 
 
 def run(args: argparse.Namespace) -> int:
+    source_url = None
+    cookies = None
     if args.input and _is_url(args.input):
-        html = fetch_html(args.input)
-        stem = _url_stem(args.input)
+        source_url = args.input
+        cookies = _session_cookies()
+        html = fetch_html(source_url, cookies)
+        fallback_name = str(_url_stem(source_url))
     elif args.input:
         in_path = Path(args.input)
         if not in_path.is_file():
             print(f"error: input file not found: {args.input}", file=sys.stderr)
             return 2
         html = in_path.read_text(encoding="utf-8")
-        stem = in_path.with_suffix("")
+        fallback_name = in_path.stem
     else:
         html = sys.stdin.read()
-        stem = Path("lesson")
+        fallback_name = "lesson"
 
     if not html.strip():
         print("error: empty input", file=sys.stderr)
@@ -379,10 +466,33 @@ def run(args: argparse.Namespace) -> int:
     if not steps:
         print("warning: no lesson steps found in input", file=sys.stderr)
 
-    text = to_json(steps) if args.format == "json" else to_markdown(steps)
+    title = extract_title(html)
+    name = slugify(title) if title else fallback_name
 
-    ext = ".json" if args.format == "json" else ".md"
-    out_path = Path(args.output) if args.output else Path(str(stem) + ext)
+    if args.format == "json":
+        text, ext = to_json(steps), ".json"
+    else:
+        text, ext = to_markdown(steps, title), ".md"
+
+    # Default layout: <out-dir>/<name>/<name>.<ext> with images/ alongside.
+    if args.output:
+        out_path = Path(args.output)
+    else:
+        out_path = Path(args.out_dir) / name / f"{name}{ext}"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Download lesson images into an images/ subfolder and rewrite references.
+    if source_url and not args.no_images:
+        srcs = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", text)
+        if srcs:
+            img_dir = out_path.parent / "images"
+            img_dir.mkdir(parents=True, exist_ok=True)
+            mapping = download_images(srcs, source_url, img_dir, cookies)
+            for src, fname in mapping.items():
+                text = text.replace(f"]({src})", f"](images/{fname})")
+            print(f"downloaded {len(mapping)} image(s) -> {img_dir}",
+                  file=sys.stderr)
+
     out_path.write_text(text, encoding="utf-8")
     print(f"wrote {len(steps)} steps -> {out_path}", file=sys.stderr)
     return 0

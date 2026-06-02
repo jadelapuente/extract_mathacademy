@@ -187,18 +187,55 @@ def test_json_is_a_bare_step_array(steps):
 def test_cli_writes_markdown_file(tmp_path):
     src = tmp_path / "lesson.html"
     src.write_text(TEST_HTML.read_text(encoding="utf-8"), encoding="utf-8")
-    rc = ex.main([str(src)])
+    rc = ex.main([str(src), "--out-dir", str(tmp_path)])
     assert rc == 0
-    assert (tmp_path / "lesson.md").is_file()
+    # No #topicName in test.html, so the name falls back to the input stem.
+    assert (tmp_path / "lesson" / "lesson.md").is_file()
 
 
 def test_cli_writes_json_file(tmp_path):
     src = tmp_path / "lesson.html"
     src.write_text(TEST_HTML.read_text(encoding="utf-8"), encoding="utf-8")
-    rc = ex.main([str(src), "--format", "json"])
+    rc = ex.main([str(src), "--format", "json", "--out-dir", str(tmp_path)])
     assert rc == 0
-    assert (tmp_path / "lesson.json").is_file()
+    assert (tmp_path / "lesson" / "lesson.json").is_file()
+
+
+def test_cli_explicit_output_path(tmp_path):
+    src = tmp_path / "lesson.html"
+    src.write_text(TEST_HTML.read_text(encoding="utf-8"), encoding="utf-8")
+    out = tmp_path / "custom.md"
+    rc = ex.main([str(src), "-o", str(out)])
+    assert rc == 0
+    assert out.is_file()
 
 
 def test_cli_missing_file_returns_2(tmp_path):
     assert ex.main([str(tmp_path / "nope.html")]) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Title / slug                                                                #
+# --------------------------------------------------------------------------- #
+
+def test_slugify():
+    assert ex.slugify("Inverses of Quadratic Functions") == \
+        "inverses-of-quadratic-functions"
+    assert ex.slugify("  Multi   space & punct!  ") == "multi-space-punct"
+    assert ex.slugify("") == "lesson"
+
+
+def test_extract_title_present():
+    html = '<div id="topicName">Inverses of Quadratic Functions</div>'
+    assert ex.extract_title(html) == "Inverses of Quadratic Functions"
+
+
+def test_extract_title_absent():
+    assert ex.extract_title(TEST_HTML.read_text(encoding="utf-8")) is None
+
+
+def test_markdown_includes_title_heading(steps):
+    md = ex.to_markdown(steps, title="My Lesson")
+    assert md.startswith("# My Lesson\n")
+    # Without a title, output is unchanged (no leading H1).
+    assert not ex.to_markdown(steps).startswith("# ")
