@@ -474,22 +474,22 @@ def run(args: argparse.Namespace) -> int:
     else:
         text, ext = to_markdown(steps, title), ".md"
 
-    # Default layout: <out-dir>/<name>/<name>.<ext> with images/ alongside.
+    # Default layout: <out-dir>/<name>/<name>.<ext> with images alongside.
     if args.output:
-        out_path = Path(args.output)
+        out_path = Path(args.output) / "output"
     else:
-        out_path = Path(args.out_dir) / name / f"{name}{ext}"
+        out_path = Path(args.out_dir) / "output" / name / f"{name}{ext}"
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Download lesson images into an images/ subfolder and rewrite references.
+    # Download lesson images into the same directory and rewrite references.
     if source_url and not args.no_images:
         srcs = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", text)
         if srcs:
-            img_dir = out_path.parent / "images"
+            img_dir = out_path.parent
             img_dir.mkdir(parents=True, exist_ok=True)
             mapping = download_images(srcs, source_url, img_dir, cookies)
             for src, fname in mapping.items():
-                text = text.replace(f"]({src})", f"](images/{fname})")
+                text = text.replace(f"]({src})", f"]({fname})")
             print(f"downloaded {len(mapping)} image(s) -> {img_dir}",
                   file=sys.stderr)
 
