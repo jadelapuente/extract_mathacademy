@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
+from _model import ExampleStep, LessonStep, TutorialStep
 from _mathml import mjpage_to_latex
 
 
@@ -48,12 +48,12 @@ def clean_inline(s: str) -> str:
 # Extraction                                                                  #
 # --------------------------------------------------------------------------- #
 
-def extract_steps(html: str) -> list[dict[str, Any]]:
+def extract_steps(html: str) -> list[LessonStep]:
     soup = BeautifulSoup(html, "html.parser")
-    steps: list[dict[str, Any]] = []
+    steps: list[LessonStep] = []
     for step in soup.select("div.step"):
         anchor = step.select_one(".stepName a.stepAnchor")
-        rec: dict[str, Any] = {
+        base = {
             "id": step.get("stepid"),
             "type": step.get("steptype", ""),
             "title": clean_inline(node_text(anchor)) if anchor else "",
@@ -61,8 +61,11 @@ def extract_steps(html: str) -> list[dict[str, Any]]:
         q = step.select_one(".exampleQuestion")
         e = step.select_one(".exampleExplanation")
         if q is not None or e is not None:
-            rec["question"] = clean(node_text(q)) if q else ""
-            rec["explanation"] = clean(node_text(e)) if e else ""
+            rec: ExampleStep = {
+                **base,
+                "question": clean(node_text(q)) if q else "",
+                "explanation": clean(node_text(e)) if e else "",
+            }
         else:
             parts = []
             for node in step.find_all(["p", "img"]):
@@ -71,7 +74,10 @@ def extract_steps(html: str) -> list[dict[str, Any]]:
                 t = clean(node_text(node))
                 if t:
                     parts.append(t)
-            rec["body"] = "\n\n".join(parts)
+            rec: TutorialStep = {
+                **base,
+                "body": "\n\n".join(parts),
+            }
         steps.append(rec)
     return steps
 

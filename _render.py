@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+
+from _model import LessonStep
 
 
 # --------------------------------------------------------------------------- #
 # Rendering                                                                   #
 # --------------------------------------------------------------------------- #
 
-def to_markdown(steps: list[dict[str, Any]], title: str | None = None) -> str:
+def to_markdown(steps: list[LessonStep], title: str | None = None) -> str:
     out = [f"# {title}"] if title else []
     for s in steps:
         out.append(f"## [{s['type']}] {s['title']}".rstrip())
@@ -22,5 +23,5 @@ def to_markdown(steps: list[dict[str, Any]], title: str | None = None) -> str:
     return "\n\n".join(x for x in out if x).strip() + "\n"
 
 
-def to_json(steps: list[dict[str, Any]]) -> str:
+def to_json(steps: list[LessonStep]) -> str:
     return json.dumps(steps, indent=2, ensure_ascii=False) + "\n"
