@@ -5,6 +5,7 @@ Run with:  pytest
 import json
 import re
 from datetime import date
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -14,6 +15,12 @@ import extract_mathacademy as ex
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEST_HTML = REPO_ROOT / "test.html"
+TEST_HTML_MARKDOWN_SHA256 = (
+    "297c9ef8e27a0d1895b5dd847e31676ded7bf3a72ad8dbec4cce0fa77fcd2c35"
+)
+TEST_HTML_JSON_SHA256 = (
+    "9604269445a5b26eae3cb38e26be272f35dc7203f17c19c055378f2b94254c94"
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -188,6 +195,20 @@ def test_json_is_a_bare_step_array(steps):
     assert isinstance(doc, list)
     assert len(doc) == 5
     assert doc[0]["id"] == "20991"
+
+
+def test_test_html_output_hashes_are_stable(steps):
+    markdown = ex.to_markdown(steps)
+    json_text = ex.to_json(steps)
+
+    assert (
+        sha256(markdown.encode("utf-8")).hexdigest()
+        == TEST_HTML_MARKDOWN_SHA256
+    )
+    assert (
+        sha256(json_text.encode("utf-8")).hexdigest()
+        == TEST_HTML_JSON_SHA256
+    )
 
 
 # --------------------------------------------------------------------------- #
