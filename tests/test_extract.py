@@ -162,6 +162,15 @@ def test_tutorial_has_body_examples_have_qa(steps):
         assert s["explanation"]
 
 
+def test_extracted_steps_are_typed_mapping_compatible_objects(steps):
+    assert type(steps[0]).__name__ == "TutorialStep"
+    assert type(steps[1]).__name__ == "ExampleStep"
+    assert steps[0].title == "Introduction"
+    assert steps[0]["title"] == steps[0].title
+    assert steps[0].get("body") == steps[0].body
+    assert dict(steps[1]) == steps[1].to_dict()
+
+
 def test_no_newlines_inside_block_math(steps):
     """The core regression guard: block formulas must stay on one line."""
     md = ex.to_markdown(steps)

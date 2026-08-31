@@ -61,11 +61,11 @@ def extract_steps(html: str) -> list[LessonStep]:
         q = step.select_one(".exampleQuestion")
         e = step.select_one(".exampleExplanation")
         if q is not None or e is not None:
-            rec: ExampleStep = {
+            rec = ExampleStep(
                 **base,
-                "question": clean(node_text(q)) if q else "",
-                "explanation": clean(node_text(e)) if e else "",
-            }
+                question=clean(node_text(q)) if q else "",
+                explanation=clean(node_text(e)) if e else "",
+            )
         else:
             parts = []
             for node in step.find_all(["p", "img"]):
@@ -74,10 +74,10 @@ def extract_steps(html: str) -> list[LessonStep]:
                 t = clean(node_text(node))
                 if t:
                     parts.append(t)
-            rec: TutorialStep = {
+            rec = TutorialStep(
                 **base,
-                "body": "\n\n".join(parts),
-            }
+                body="\n\n".join(parts),
+            )
         steps.append(rec)
     return steps
 
