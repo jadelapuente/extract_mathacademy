@@ -46,13 +46,12 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 from datetime import date as dt_date
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from _client import (
@@ -66,6 +65,8 @@ from _client import (
 from _extract import clean, clean_inline, extract_steps, extract_title, node_text, slugify
 from _mathml import conv_cell, mathml_to_latex, mjpage_to_latex, normalize_latex
 from _render import to_json, to_markdown
+from _writer import download_images, image_filename as _image_filename
+from _writer import write_extracted_lesson as _write_extracted_lesson
 
 
 def _parse_completed_at(task: dict[str, Any]) -> datetime | None:
@@ -143,47 +144,6 @@ def completed_topic_ids(
     return list(seen_topic_ids)
 
 
-# Content-Type -> file extension for the image formats Math Academy serves.
-_IMG_EXT = {
-    "image/png": ".png",
-    "image/jpeg": ".jpg",
-    "image/gif": ".gif",
-    "image/svg+xml": ".svg",
-    "image/webp": ".webp",
-}
-
-
-def _image_filename(src: str, content_type: str) -> str:
-    """Local filename for an image src: keep its own extension if it has one,
-    else append the one implied by the Content-Type (graphics srcs are
-    extensionless hashes like /graphics/<hash>)."""
-    p = Path(urlparse(src).path)
-    if p.suffix:
-        return p.name
-    ext = _IMG_EXT.get(content_type.split(";")[0].strip(), ".img")
-    return p.name + ext
-
-
-def download_images(srcs, base_url: str, out_dir: Path, cookies) -> dict[str, str]:
-    """Download each image src (resolved against base_url) into out_dir using
-    the session cookie. Returns {original_src: local_filename}."""
-    import requests
-
-    mapping: dict[str, str] = {}
-    for src in dict.fromkeys(srcs):                 # de-dup, keep order
-        r = requests.get(
-            urljoin(base_url, src),
-            cookies=cookies,
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=30,
-        )
-        r.raise_for_status()
-        fname = _image_filename(src, r.headers.get("content-type", ""))
-        (out_dir / fname).write_bytes(r.content)
-        mapping[src] = fname
-    return mapping
-
-
 def _is_url(s: str) -> bool:
     return s.startswith("http://") or s.startswith("https://")
 
@@ -205,34 +165,18 @@ def write_extracted_lesson(
     cookies=None,
     no_images: bool = False,
 ) -> tuple[Path, int]:
-    steps = extract_steps(html)
-    if not steps:
-        print("warning: no lesson steps found in input", file=sys.stderr)
-
-    title = extract_title(html)
-    name = slugify(title) if title else fallback_name
-
-    if fmt == "json":
-        text, ext = to_json(steps), ".json"
-    else:
-        text, ext = to_markdown(steps, title), ".md"
-
-    # Default layout: <out-dir>/<name>/<name>.<ext> with images alongside.
-    out_path = output if output else out_dir / name / f"{name}{ext}"
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-
-    # Download lesson images into the same directory and rewrite references.
-    if source_url and not no_images:
-        srcs = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", text)
-        if srcs:
-            mapping = download_images(srcs, source_url, out_path.parent, cookies)
-            for src, fname in mapping.items():
-                text = text.replace(f"]({src})", f"]({fname})")
-            print(f"downloaded {len(mapping)} image(s) -> {out_path.parent}",
-                  file=sys.stderr)
-
-    out_path.write_text(text, encoding="utf-8")
-    return out_path, len(steps)
+    return _write_extracted_lesson(
+        html,
+        fallback_name=fallback_name,
+        fmt=fmt,
+        out_dir=out_dir,
+        output=output,
+        source_url=source_url,
+        cookies=cookies,
+        no_images=no_images,
+        download_images_fn=download_images,
+        stderr=sys.stderr,
+    )
 
 
 def extract_completed_topics(
