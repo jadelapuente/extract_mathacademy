@@ -52,64 +52,20 @@ from datetime import date as dt_date
 from datetime import datetime, time, timedelta
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote, urljoin, urlparse
+from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
 
+from _client import (
+    MA_BASE_URL,
+    MA_DOMAIN,
+    MathAcademyClient,
+    fetch_html,
+    fetch_previous_tasks,
+    session_cookies as _session_cookies,
+)
 from _extract import clean, clean_inline, extract_steps, extract_title, node_text, slugify
 from _mathml import conv_cell, mathml_to_latex, mjpage_to_latex, normalize_latex
 from _render import to_json, to_markdown
-
-
-# --------------------------------------------------------------------------- #
-# Fetching (reuse the browser's existing Math Academy login)                  #
-# --------------------------------------------------------------------------- #
-
-MA_DOMAIN = "mathacademy.com"
-MA_BASE_URL = f"https://{MA_DOMAIN}"
-
-
-def _session_cookies():
-    """Read the Math Academy `session` cookie from whichever local browser
-    you're logged in with. Tries each in turn, skipping any that's locked or
-    unreadable (e.g. Safari's permission-gated cookie store)."""
-    import browser_cookie3 as bc3
-
-    for name in ("chrome", "brave", "edge", "firefox", "safari"):
-        try:
-            cj = getattr(bc3, name)(domain_name=MA_DOMAIN)
-        except Exception:                           # locked DB, no profile, etc.
-            continue
-        if any(c.name == "session" for c in cj):
-            return cj
-    raise SystemExit(
-        "Could not find a Math Academy session in any browser. "
-        "Log in at https://mathacademy.com, then run this again."
-    )
-
-
-def fetch_html(url: str, cookies=None) -> str:
-    import requests
-
-    r = requests.get(
-        url,
-        cookies=cookies if cookies is not None else _session_cookies(),
-        headers={"User-Agent": "Mozilla/5.0"},
-        allow_redirects=True,
-        timeout=30,
-    )
-    # Bounced to a login/landing page => the session cookie is stale.
-    if "/login" in r.url or 'type="password"' in r.text.lower():
-        raise SystemExit(
-            f"Got redirected to {r.url} -- your Math Academy session looks "
-            "expired. Re-open mathacademy.com in your browser to refresh it."
-        )
-    r.raise_for_status()
-    return r.text
-
-
-def _iso_z(dt: datetime) -> str:
-    """Render an aware datetime as the UTC ISO form Math Academy accepts."""
-    return dt.astimezone(ZoneInfo("UTC")).isoformat().replace("+00:00", "Z")
 
 
 def _parse_completed_at(task: dict[str, Any]) -> datetime | None:
@@ -117,42 +73,6 @@ def _parse_completed_at(task: dict[str, Any]) -> datetime | None:
     if not completed:
         return None
     return datetime.fromisoformat(completed.replace("Z", "+00:00"))
-
-
-def fetch_previous_tasks(before: datetime, cookies=None) -> list[dict[str, Any]]:
-    """Fetch completed tasks older than `before`.
-
-    This mirrors Math Academy's dashboard pagination endpoint. The server also
-    accepts a misspelled `minumum` query parameter, but the default pagination
-    was more reliable in live probing.
-    """
-    import requests
-
-    url = f"{MA_BASE_URL}/api/previous-tasks/{quote(_iso_z(before), safe='')}"
-    r = requests.get(
-        url,
-        cookies=cookies if cookies is not None else _session_cookies(),
-        headers={"User-Agent": "Mozilla/5.0", "Accept": "application/json"},
-        allow_redirects=True,
-        timeout=30,
-    )
-    if "/login" in r.url or 'type="password"' in r.text.lower():
-        raise SystemExit(
-            f"Got redirected to {r.url} -- your Math Academy session looks "
-            "expired. Re-open mathacademy.com in your browser to refresh it."
-        )
-    r.raise_for_status()
-    try:
-        data = r.json()
-    except ValueError as exc:
-        raise SystemExit(
-            "Math Academy did not return JSON for completed tasks. "
-            "Your session may be expired."
-        ) from exc
-    if not isinstance(data, list):
-        raise SystemExit("Unexpected Math Academy completed-task response.")
-    return data
-
 
 def completed_topic_ids(
     start_date: dt_date,
