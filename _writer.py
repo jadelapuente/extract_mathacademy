@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import re
 import sys
 from pathlib import Path
@@ -98,18 +97,3 @@ def write_extracted_lesson(
 
     out_path.write_text(text, encoding="utf-8")
     return out_path, len(steps)
-
-
-def write_completed_topic_manifest(
-    range_dir: Path,
-    topic_ids: list[int],
-    manifest: list[dict[str, Any]],
-) -> None:
-    (range_dir / "topic_ids.json").write_text(
-        json.dumps(topic_ids, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    (range_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
