@@ -5,16 +5,49 @@ import sys
 from datetime import date as dt_date
 from datetime import datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Callable, TextIO
+from typing import Any, Callable, Protocol, TextIO
 from zoneinfo import ZoneInfo
 
 from _client import MA_BASE_URL, fetch_html, fetch_previous_tasks, session_cookies
 from _writer import write_extracted_lesson
 
-FetchPreviousTasks = Callable[[datetime, Any], list[dict[str, Any]]]
-CompletedTopicIds = Callable[..., list[int]]
-FetchHtml = Callable[[str, Any], str]
-WriteExtractedLesson = Callable[..., tuple[Path, int]]
+
+class FetchPreviousTasks(Protocol):
+    def __call__(self, before: datetime, cookies: Any = None) -> list[dict[str, Any]]:
+        ...
+
+
+class CompletedTopicIds(Protocol):
+    def __call__(
+        self,
+        start_date: dt_date,
+        end_date: dt_date,
+        *,
+        timezone: str = "America/Los_Angeles",
+        cookies: Any = None,
+        include_review_topics: bool = False,
+    ) -> list[int]:
+        ...
+
+
+class FetchHtml(Protocol):
+    def __call__(self, url: str, cookies: Any = None) -> str:
+        ...
+
+
+class WriteExtractedLesson(Protocol):
+    def __call__(
+        self,
+        html: str,
+        *,
+        fallback_name: str,
+        fmt: str,
+        out_dir: Path,
+        source_url: str | None = None,
+        cookies: Any = None,
+        no_images: bool = False,
+    ) -> tuple[Path, int]:
+        ...
 
 
 def parse_completed_at(task: dict[str, Any]) -> datetime | None:
