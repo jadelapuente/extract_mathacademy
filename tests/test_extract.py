@@ -4,6 +4,7 @@ Run with:  pytest
 """
 import json
 import re
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -210,6 +211,44 @@ def test_cli_explicit_output_path(tmp_path):
     assert out.is_file()
 
 
+def test_write_extracted_lesson_downloads_images_next_to_output(monkeypatch, tmp_path):
+    html = """
+    <html>
+      <body>
+        <div id="topicName">Image Lesson</div>
+        <div class="step" stepid="1" steptype="tutorial">
+          <div class="stepName"><a class="stepAnchor">Introduction</a></div>
+          <p>See <img src="/graphics/hash" alt="diagram"></p>
+        </div>
+      </body>
+    </html>
+    """
+
+    def fake_download_images(srcs, base_url, out_dir, cookies):
+        assert srcs == ["/graphics/hash"]
+        assert base_url == "https://mathacademy.com/topics/1"
+        assert cookies == ["session"]
+        (out_dir / "hash.png").write_bytes(b"png")
+        return {"/graphics/hash": "hash.png"}
+
+    monkeypatch.setattr(ex, "download_images", fake_download_images)
+
+    out_path, step_count = ex.write_extracted_lesson(
+        html,
+        fallback_name="fallback",
+        fmt="markdown",
+        out_dir=tmp_path,
+        source_url="https://mathacademy.com/topics/1",
+        cookies=["session"],
+    )
+
+    assert step_count == 1
+    assert out_path == tmp_path / "image-lesson" / "image-lesson.md"
+    assert (out_path.parent / "hash.png").is_file()
+    assert not (out_path.parent / "images").exists()
+    assert "![diagram](hash.png)" in out_path.read_text(encoding="utf-8")
+
+
 def test_cli_missing_file_returns_2(tmp_path):
     assert ex.main([str(tmp_path / "nope.html")]) == 2
 
@@ -239,3 +278,151 @@ def test_markdown_includes_title_heading(steps):
     assert md.startswith("# My Lesson\n")
     # Without a title, output is unchanged (no leading H1).
     assert not ex.to_markdown(steps).startswith("# ")
+
+
+# --------------------------------------------------------------------------- #
+# Completed topic ids                                                         #
+# --------------------------------------------------------------------------- #
+
+def completed_task(task_id, task_type, topic_id, completed):
+    return {
+        "id": task_id,
+        "type": task_type,
+        "completed": completed,
+        "topic": {"id": topic_id, "name": f"Topic {topic_id}"},
+    }
+
+
+def test_completed_topic_ids_pages_and_deduplicates(monkeypatch):
+    pages = [
+        [
+            completed_task(1, "Lesson", 10, "2026-07-05T11:16:14.000Z"),
+            completed_task(2, "Review", 99, "2026-07-05T10:48:24.000Z"),
+            completed_task(3, "Lesson", 10, "2026-06-15T12:00:00.000Z"),
+        ],
+        [
+            completed_task(4, "Lesson", 20, "2026-06-01T07:00:00.000Z"),
+            completed_task(5, "Lesson", 30, "2026-06-01T06:59:59.000Z"),
+        ],
+    ]
+    calls = []
+
+    def fake_fetch_previous_tasks(before, cookies=None):
+        calls.append(before)
+        return pages[len(calls) - 1]
+
+    monkeypatch.setattr(ex, "fetch_previous_tasks", fake_fetch_previous_tasks)
+
+    ids = ex.completed_topic_ids(
+        date(2026, 6, 1),
+        date(2026, 8, 1),
+        cookies=[],
+    )
+
+    assert ids == [10, 20]
+    assert len(calls) == 2
+
+
+def test_completed_topic_ids_can_include_review_topics(monkeypatch):
+    def fake_fetch_previous_tasks(before, cookies=None):
+        return [
+            completed_task(1, "Lesson", 10, "2026-07-05T11:16:14.000Z"),
+            completed_task(2, "Review", 99, "2026-07-05T10:48:24.000Z"),
+            completed_task(3, "Lesson", 20, "2026-06-01T06:59:59.000Z"),
+        ]
+
+    monkeypatch.setattr(ex, "fetch_previous_tasks", fake_fetch_previous_tasks)
+
+    ids = ex.completed_topic_ids(
+        date(2026, 6, 1),
+        date(2026, 8, 1),
+        cookies=[],
+        include_review_topics=True,
+    )
+
+    assert ids == [10, 99]
+
+
+def topic_html(topic_id):
+    return f"""
+    <html>
+      <body>
+        <div id="topicName">Topic {topic_id}</div>
+        <div class="step" stepid="1" steptype="tutorial">
+          <div class="stepName"><a class="stepAnchor">Introduction</a></div>
+          <p>Body for topic {topic_id}</p>
+        </div>
+      </body>
+    </html>
+    """
+
+
+def test_start_end_cli_extracts_completed_topic_artifacts(
+    monkeypatch,
+    tmp_path,
+    capsys,
+):
+    monkeypatch.setattr(ex, "_session_cookies", lambda: [])
+    monkeypatch.setattr(ex, "completed_topic_ids", lambda *a, **kw: [477, 1016])
+    monkeypatch.setattr(
+        ex,
+        "fetch_html",
+        lambda url, cookies=None: topic_html(url.rstrip("/").split("/")[-1]),
+    )
+
+    rc = ex.main([
+        "--start",
+        "2026-06-01",
+        "--end",
+        "2026-08-01",
+        "--out-dir",
+        str(tmp_path),
+        "--no-images",
+    ])
+
+    assert rc == 0
+    range_dir = tmp_path / "2026-06-01-to-2026-08-01"
+    assert json.loads((range_dir / "topic_ids.json").read_text()) == [477, 1016]
+    assert json.loads((range_dir / "manifest.json").read_text()) == [
+        {
+            "topic_id": 477,
+            "url": "https://mathacademy.com/topics/477",
+            "output": str(range_dir / "topic-477" / "topic-477.md"),
+            "steps": 1,
+        },
+        {
+            "topic_id": 1016,
+            "url": "https://mathacademy.com/topics/1016",
+            "output": str(range_dir / "topic-1016" / "topic-1016.md"),
+            "steps": 1,
+        },
+    ]
+    assert (range_dir / "topic-477" / "topic-477.md").read_text().startswith(
+        "# Topic 477\n"
+    )
+    assert (range_dir / "topic-1016" / "topic-1016.md").is_file()
+
+    captured = capsys.readouterr()
+    assert "wrote 2 completed topic(s)" in captured.err
+    assert captured.out == ""
+
+
+def test_start_end_cli_rejects_output_file(tmp_path, capsys):
+    rc = ex.main([
+        "--start",
+        "2026-06-01",
+        "--end",
+        "2026-08-01",
+        "-o",
+        str(tmp_path / "topic_ids.json"),
+    ])
+
+    assert rc == 2
+    assert "use --out-dir" in capsys.readouterr().err
+
+
+def test_start_end_cli_requires_both_dates(capsys):
+    rc = ex.main(["--start", "2026-06-01"])
+
+    assert rc == 2
+    assert "--start and --end" in capsys.readouterr().err
