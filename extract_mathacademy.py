@@ -45,14 +45,10 @@ output file path.
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from datetime import date as dt_date
-from datetime import datetime, time, timedelta
 from pathlib import Path
-from typing import Any
 from urllib.parse import urlparse
-from zoneinfo import ZoneInfo
 
 from _client import (
     MA_BASE_URL,
@@ -62,18 +58,15 @@ from _client import (
     fetch_previous_tasks,
     session_cookies as _session_cookies,
 )
+from _completed import completed_topic_ids as _completed_topic_ids
+from _completed import extract_completed_topics as _extract_completed_topics
+from _completed import parse_completed_at as _parse_completed_at
 from _extract import clean, clean_inline, extract_steps, extract_title, node_text, slugify
 from _mathml import conv_cell, mathml_to_latex, mjpage_to_latex, normalize_latex
 from _render import to_json, to_markdown
 from _writer import download_images, image_filename as _image_filename
 from _writer import write_extracted_lesson as _write_extracted_lesson
 
-
-def _parse_completed_at(task: dict[str, Any]) -> datetime | None:
-    completed = task.get("completed")
-    if not completed:
-        return None
-    return datetime.fromisoformat(completed.replace("Z", "+00:00"))
 
 def completed_topic_ids(
     start_date: dt_date,
@@ -83,65 +76,15 @@ def completed_topic_ids(
     cookies=None,
     include_review_topics: bool = False,
 ) -> list[int]:
-    """Return unique topic ids completed within an inclusive local date range."""
-    if end_date < start_date:
-        raise ValueError("end date must be on or after start date")
-
-    local_tz = ZoneInfo(timezone)
-    utc = ZoneInfo("UTC")
-    start_utc = datetime.combine(start_date, time.min, local_tz).astimezone(utc)
-    end_exclusive_utc = datetime.combine(
-        end_date + timedelta(days=1), time.min, local_tz
-    ).astimezone(utc)
-
-    allowed_types = {"Lesson"}
-    if include_review_topics:
-        allowed_types.add("Review")
-
-    cookies = cookies if cookies is not None else _session_cookies()
-    cursor = end_exclusive_utc
-    seen_task_ids: set[int] = set()
-    seen_topic_ids: dict[int, None] = {}
-
-    while True:
-        page = fetch_previous_tasks(cursor, cookies)
-        if not page:
-            break
-
-        oldest_completed: datetime | None = None
-        for task in page:
-            completed_at = _parse_completed_at(task)
-            if completed_at is None:
-                continue
-            oldest_completed = (
-                completed_at
-                if oldest_completed is None or completed_at < oldest_completed
-                else oldest_completed
-            )
-
-            task_id = task.get("id")
-            if isinstance(task_id, int):
-                if task_id in seen_task_ids:
-                    continue
-                seen_task_ids.add(task_id)
-
-            if not (start_utc <= completed_at < end_exclusive_utc):
-                continue
-            if task.get("type") not in allowed_types:
-                continue
-
-            topic = task.get("topic") or {}
-            topic_id = topic.get("id")
-            if isinstance(topic_id, int):
-                seen_topic_ids.setdefault(topic_id, None)
-
-        if oldest_completed is None or oldest_completed < start_utc:
-            break
-        if oldest_completed >= cursor:
-            break
-        cursor = oldest_completed
-
-    return list(seen_topic_ids)
+    return _completed_topic_ids(
+        start_date,
+        end_date,
+        timezone=timezone,
+        cookies=cookies,
+        include_review_topics=include_review_topics,
+        fetch_previous_tasks_fn=fetch_previous_tasks,
+        session_cookies_fn=_session_cookies,
+    )
 
 
 def _is_url(s: str) -> bool:
@@ -189,54 +132,21 @@ def extract_completed_topics(
     no_images: bool,
     include_review_topics: bool,
 ) -> tuple[Path, list[int]]:
-    if end_date < start_date:
-        raise ValueError("end date must be on or after start date")
-
-    cookies = _session_cookies()
-    topic_ids = completed_topic_ids(
+    return _extract_completed_topics(
         start_date,
         end_date,
         timezone=timezone,
-        cookies=cookies,
+        out_dir=out_dir,
+        fmt=fmt,
+        no_images=no_images,
         include_review_topics=include_review_topics,
+        session_cookies_fn=_session_cookies,
+        completed_topic_ids_fn=completed_topic_ids,
+        fetch_html_fn=fetch_html,
+        write_extracted_lesson_fn=write_extracted_lesson,
+        base_url=MA_BASE_URL,
+        stderr=sys.stderr,
     )
-
-    range_dir = out_dir / f"{start_date.isoformat()}-to-{end_date.isoformat()}"
-    range_dir.mkdir(parents=True, exist_ok=True)
-    (range_dir / "topic_ids.json").write_text(
-        json.dumps(topic_ids, indent=2) + "\n",
-        encoding="utf-8",
-    )
-
-    manifest: list[dict[str, Any]] = []
-    for index, topic_id in enumerate(topic_ids, start=1):
-        url = f"{MA_BASE_URL}/topics/{topic_id}"
-        html = fetch_html(url, cookies)
-        out_path, step_count = write_extracted_lesson(
-            html,
-            fallback_name=str(topic_id),
-            fmt=fmt,
-            out_dir=range_dir,
-            source_url=url,
-            cookies=cookies,
-            no_images=no_images,
-        )
-        manifest.append({
-            "topic_id": topic_id,
-            "url": url,
-            "output": str(out_path),
-            "steps": step_count,
-        })
-        print(
-            f"[{index}/{len(topic_ids)}] wrote {step_count} steps -> {out_path}",
-            file=sys.stderr,
-        )
-
-    (range_dir / "manifest.json").write_text(
-        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-        encoding="utf-8",
-    )
-    return range_dir, topic_ids
 
 
 # --------------------------------------------------------------------------- #
