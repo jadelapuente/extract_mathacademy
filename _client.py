@@ -10,7 +10,23 @@ MA_BASE_URL = f"https://{MA_DOMAIN}"
 USER_AGENT = "Mozilla/5.0"
 
 
-def session_cookies():
+class MathAcademyError(Exception):
+    """Base class for recoverable Math Academy client failures."""
+
+
+class MissingSessionError(MathAcademyError):
+    """No usable Math Academy session cookie was found in local browsers."""
+
+
+class ExpiredSessionError(MathAcademyError):
+    """The supplied Math Academy session was redirected to login."""
+
+
+class InvalidResponseError(MathAcademyError):
+    """Math Academy returned an unexpected response shape."""
+
+
+def load_session_cookies():
     """Read the Math Academy `session` cookie from a local browser profile."""
     import browser_cookie3 as bc3
 
@@ -21,10 +37,17 @@ def session_cookies():
             continue
         if any(c.name == "session" for c in cj):
             return cj
-    raise SystemExit(
+    raise MissingSessionError(
         "Could not find a Math Academy session in any browser. "
         "Log in at https://mathacademy.com, then run this again."
     )
+
+
+def session_cookies():
+    try:
+        return load_session_cookies()
+    except MathAcademyError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 def _iso_z(dt: datetime) -> str:
@@ -34,7 +57,7 @@ def _iso_z(dt: datetime) -> str:
 
 def _raise_if_login_page(response) -> None:
     if "/login" in response.url or 'type="password"' in response.text.lower():
-        raise SystemExit(
+        raise ExpiredSessionError(
             f"Got redirected to {response.url} -- your Math Academy session "
             "looks expired. Re-open mathacademy.com in your browser to refresh "
             "it."
@@ -45,7 +68,7 @@ class MathAcademyClient:
     """Authenticated HTTP access to Math Academy pages and task APIs."""
 
     def __init__(self, cookies=None, base_url: str = MA_BASE_URL):
-        self.cookies = cookies if cookies is not None else session_cookies()
+        self.cookies = cookies if cookies is not None else load_session_cookies()
         self.base_url = base_url.rstrip("/")
 
     def fetch_html(self, url: str) -> str:
@@ -84,18 +107,31 @@ class MathAcademyClient:
         try:
             data = response.json()
         except ValueError as exc:
-            raise SystemExit(
+            raise InvalidResponseError(
                 "Math Academy did not return JSON for completed tasks. "
                 "Your session may be expired."
             ) from exc
         if not isinstance(data, list):
-            raise SystemExit("Unexpected Math Academy completed-task response.")
+            raise InvalidResponseError(
+                "Unexpected Math Academy completed-task response."
+            )
         return data
 
 
+def _exit_for_client_error(fn):
+    try:
+        return fn()
+    except MathAcademyError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
 def fetch_html(url: str, cookies=None) -> str:
-    return MathAcademyClient(cookies=cookies).fetch_html(url)
+    return _exit_for_client_error(
+        lambda: MathAcademyClient(cookies=cookies).fetch_html(url)
+    )
 
 
 def fetch_previous_tasks(before: datetime, cookies=None) -> list[dict[str, Any]]:
-    return MathAcademyClient(cookies=cookies).fetch_previous_tasks(before)
+    return _exit_for_client_error(
+        lambda: MathAcademyClient(cookies=cookies).fetch_previous_tasks(before)
+    )

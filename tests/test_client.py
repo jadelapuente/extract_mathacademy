@@ -4,7 +4,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from _client import MathAcademyClient
+from _client import (
+    ExpiredSessionError,
+    InvalidResponseError,
+    MathAcademyClient,
+    fetch_html,
+    fetch_previous_tasks,
+)
 
 
 class FakeResponse:
@@ -81,7 +87,7 @@ def test_fetch_previous_tasks_builds_cursor_url_and_returns_list(monkeypatch):
     }
 
 
-def test_fetch_html_rejects_login_redirect(monkeypatch):
+def test_client_fetch_html_rejects_login_redirect(monkeypatch):
     monkeypatch.setattr(
         "requests.get",
         lambda *a, **kw: FakeResponse(
@@ -90,13 +96,13 @@ def test_fetch_html_rejects_login_redirect(monkeypatch):
         ),
     )
 
-    with pytest.raises(SystemExit, match="session looks expired"):
+    with pytest.raises(ExpiredSessionError, match="session looks expired"):
         MathAcademyClient(cookies=["session"]).fetch_html(
             "https://mathacademy.com/topics/285"
         )
 
 
-def test_fetch_previous_tasks_rejects_non_json(monkeypatch):
+def test_client_fetch_previous_tasks_rejects_non_json(monkeypatch):
     monkeypatch.setattr(
         "requests.get",
         lambda *a, **kw: FakeResponse(
@@ -106,13 +112,42 @@ def test_fetch_previous_tasks_rejects_non_json(monkeypatch):
         ),
     )
 
-    with pytest.raises(SystemExit, match="did not return JSON"):
+    with pytest.raises(InvalidResponseError, match="did not return JSON"):
         MathAcademyClient(cookies=["session"]).fetch_previous_tasks(
             datetime(2026, 8, 2, 7, tzinfo=timezone.utc)
         )
 
 
-def test_fetch_previous_tasks_rejects_non_list_response(monkeypatch):
+def test_client_fetch_previous_tasks_rejects_non_list_response(monkeypatch):
+    monkeypatch.setattr(
+        "requests.get",
+        lambda *a, **kw: FakeResponse(
+            url="https://mathacademy.com/api/previous-tasks/cursor",
+            text="{}",
+            json_data={"id": 1},
+        ),
+    )
+
+    with pytest.raises(InvalidResponseError, match="Unexpected Math Academy"):
+        MathAcademyClient(cookies=["session"]).fetch_previous_tasks(
+            datetime(2026, 8, 2, 7, tzinfo=timezone.utc)
+        )
+
+
+def test_fetch_html_wrapper_preserves_system_exit_behavior(monkeypatch):
+    monkeypatch.setattr(
+        "requests.get",
+        lambda *a, **kw: FakeResponse(
+            url="https://mathacademy.com/login",
+            text="<input type=\"password\">",
+        ),
+    )
+
+    with pytest.raises(SystemExit, match="session looks expired"):
+        fetch_html("https://mathacademy.com/topics/285", cookies=["session"])
+
+
+def test_fetch_previous_tasks_wrapper_preserves_system_exit_behavior(monkeypatch):
     monkeypatch.setattr(
         "requests.get",
         lambda *a, **kw: FakeResponse(
@@ -123,6 +158,7 @@ def test_fetch_previous_tasks_rejects_non_list_response(monkeypatch):
     )
 
     with pytest.raises(SystemExit, match="Unexpected Math Academy"):
-        MathAcademyClient(cookies=["session"]).fetch_previous_tasks(
-            datetime(2026, 8, 2, 7, tzinfo=timezone.utc)
+        fetch_previous_tasks(
+            datetime(2026, 8, 2, 7, tzinfo=timezone.utc),
+            cookies=["session"],
         )
