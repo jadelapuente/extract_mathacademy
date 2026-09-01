@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
@@ -87,6 +88,24 @@ def extract_title(html: str) -> str | None:
     el = BeautifulSoup(html, "html.parser").select_one("#topicName")
     title = clean_inline(el.get_text()) if el else ""
     return title or None
+
+
+def topic_id_from_href(href: str) -> int | None:
+    path = urlparse(href).path.rstrip("/")
+    if not path.startswith("/topics/"):
+        return None
+    match = re.search(r"(?:^|[-/])(\d+)$", path)
+    return int(match.group(1)) if match else None
+
+
+def extract_prerequisite_topic_ids(html: str) -> list[int]:
+    soup = BeautifulSoup(html, "html.parser")
+    ids: dict[int, None] = {}
+    for anchor in soup.select("a.prerequisiteLink[href]"):
+        topic_id = topic_id_from_href(anchor.get("href", ""))
+        if topic_id is not None:
+            ids.setdefault(topic_id, None)
+    return list(ids)
 
 
 def slugify(text: str) -> str:

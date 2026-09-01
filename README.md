@@ -32,11 +32,38 @@ python extract_mathacademy.py \
   --end 2026-08-01
 ```
 
-This creates `2026-06-01-to-2026-08-01/`, writes `topic_ids.json` and
-`manifest.json`, then stores each topic in its own regular per-lesson
-subdirectory. Dates must be ISO `YYYY-MM-DD`. By default only completed Lesson
-task topics are included; pass `--include-review-topics` to include Review task
-topics too.
+This creates `2026-06-01-to-2026-08-01/`, writes `topic_ids.json`,
+`groups.json`, and `manifest.json`, then groups completed topics under related
+node-chain directories. Dates must be ISO `YYYY-MM-DD`. By default only
+completed Lesson task topics are included; pass `--include-review-topics` to
+include Review task topics too.
+
+```bash
+python extract_mathacademy.py \
+  --start 2026-06-01 \
+  --end 2026-08-01
+```
+
+The grouping uses linked learning-node metadata when available and otherwise
+uses prerequisite topic links from the fetched topic pages. Related chains are
+written as nested directories:
+
+```text
+2026-06-01-to-2026-08-01/
+  groups.json
+  manifest.json
+  topic_ids.json
+  conditional-statements/
+    topic-477/
+      topic-477.md
+    topic-478/
+      topic-478.md
+```
+
+Group directories use semantic slugs directly. They are never prefixed with
+`group-01-`; duplicate slugs are resolved as `name`, `name-2`, and so on. If no
+usable node-chain metadata is present, grouped extraction falls back to
+deterministic single-topic groups.
 
 By default output is written to a per-lesson directory under the current working
 directory, or under `--out-dir` when provided. For URL input, downloaded images

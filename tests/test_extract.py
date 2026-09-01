@@ -4,7 +4,7 @@ Run with:  pytest
 """
 import json
 import re
-from datetime import date
+from datetime import date, datetime, timezone
 from hashlib import sha256
 from pathlib import Path
 
@@ -12,6 +12,8 @@ import pytest
 from bs4 import BeautifulSoup
 
 import extract_mathacademy as ex
+from _completed import CompletedTopicRecord
+from _grouping import group_completed_topics
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEST_HTML = REPO_ROOT / "test.html"
@@ -373,6 +375,138 @@ def test_completed_topic_ids_can_include_review_topics(monkeypatch):
     assert ids == [10, 99]
 
 
+def test_completed_topic_records_preserve_relationship_metadata(monkeypatch):
+    def fake_fetch_previous_tasks(before, cookies=None):
+        return [
+            {
+                "id": 1,
+                "type": "Lesson",
+                "completed": "2026-07-05T11:16:14.000Z",
+                "nodeId": 101,
+                "nextNodeId": 102,
+                "topic": {"id": 10, "name": "Conditional Statements"},
+            },
+            {
+                "id": 2,
+                "type": "Lesson",
+                "completed": "2026-07-05T10:48:24.000Z",
+                "learningNode": {"id": 102, "previous": {"id": 101}},
+                "topic": {"id": 20, "name": "Biconditional Statements"},
+            },
+        ]
+
+    monkeypatch.setattr(ex, "fetch_previous_tasks", fake_fetch_previous_tasks)
+
+    records = ex.completed_topic_records(
+        date(2026, 6, 1),
+        date(2026, 8, 1),
+        cookies=[],
+    )
+
+    assert [record.topic_id for record in records] == [10, 20]
+    assert records[0].topic_name == "Conditional Statements"
+    assert records[0].learning_node_id == 101
+    assert records[0].next_learning_node_id == 102
+    assert records[1].learning_node_id == 102
+    assert records[1].previous_learning_node_id == 101
+
+
+def completed_record(
+    topic_id,
+    topic_name,
+    node_id=None,
+    previous_node_id=None,
+    next_node_id=None,
+    prerequisite_topic_ids=(),
+):
+    return CompletedTopicRecord(
+        task_id=topic_id,
+        task_type="Lesson",
+        topic_id=topic_id,
+        topic_name=topic_name,
+        completed_at=datetime(
+            2026,
+            7,
+            1,
+            minute=topic_id % 60,
+            tzinfo=timezone.utc,
+        ),
+        learning_node_id=node_id,
+        previous_learning_node_id=previous_node_id,
+        next_learning_node_id=next_node_id,
+        prerequisite_topic_ids=tuple(prerequisite_topic_ids),
+    )
+
+
+def test_group_completed_topics_orders_disconnected_node_chains():
+    records = [
+        completed_record(2, "Biconditional Statements", 2, 1, 3),
+        completed_record(1, "Conditional Statements", 1, None, 2),
+        completed_record(3, "Truth Tables", 3, 2, None),
+        completed_record(5, "Cotangent Equations", 5, 4, None),
+        completed_record(4, "Secant Equations", 4, None, 5),
+    ]
+
+    def namer(group_records):
+        if group_records[0].topic_id == 1:
+            return "Logic and Sets"
+        return "Trig Equations"
+
+    groups = group_completed_topics(records, namer=namer)
+
+    assert [group.slug for group in groups] == [
+        "logic-and-sets",
+        "trig-equations",
+    ]
+    assert [[record.topic_id for record in group.records] for group in groups] == [
+        [1, 2, 3],
+        [4, 5],
+    ]
+    assert not any(group.slug.startswith("group-") for group in groups)
+
+
+def test_group_completed_topics_resolves_slug_collisions_without_group_prefix():
+    records = [
+        completed_record(1, "Topic A"),
+        completed_record(2, "Topic B"),
+    ]
+
+    groups = group_completed_topics(records, namer=lambda records: "Same Name")
+
+    assert [group.slug for group in groups] == ["same-name", "same-name-2"]
+    assert not any(group.slug.startswith("group-") for group in groups)
+
+
+def test_extract_prerequisite_topic_ids_from_topic_html():
+    html = """
+    <div id="prerequisites">
+      <a href="/topics/conditional-statements-246" class="prerequisiteLink">
+        Conditional Statements
+      </a>
+      <a href="/topics/247" class="prerequisiteLink">
+        Logical Equivalence
+      </a>
+    </div>
+    """
+
+    assert ex.extract_prerequisite_topic_ids(html) == [246, 247]
+
+
+def test_group_completed_topics_uses_prerequisite_topic_edges():
+    records = [
+        completed_record(248, "Biconditional Statements", prerequisite_topic_ids=[246]),
+        completed_record(246, "Conditional Statements"),
+        completed_record(247, "Logical Equivalence"),
+    ]
+
+    groups = group_completed_topics(records)
+
+    assert [[record.topic_id for record in group.records] for group in groups] == [
+        [246, 248],
+        [247],
+    ]
+
+
 def topic_html(topic_id):
     return f"""
     <html>
@@ -387,17 +521,53 @@ def topic_html(topic_id):
     """
 
 
-def test_start_end_cli_extracts_completed_topic_artifacts(
+def topic_html_with_prereqs(topic_id, *prereq_ids):
+    prereqs = "\n".join(
+        f"""
+        <div class="prerequisite">
+          <a href="/topics/prereq-{prereq_id}" class="prerequisiteLink">
+            Topic {prereq_id}
+          </a>
+        </div>
+        """
+        for prereq_id in prereq_ids
+    )
+    return f"""
+    <html>
+      <body>
+        <div id="topicName">Topic {topic_id}</div>
+        <div id="prerequisites">{prereqs}</div>
+        <div class="step" stepid="1" steptype="tutorial">
+          <div class="stepName"><a class="stepAnchor">Introduction</a></div>
+          <p>Body for topic {topic_id}</p>
+        </div>
+      </body>
+    </html>
+    """
+
+
+def test_start_end_cli_extracts_grouped_completed_topic_artifacts(
     monkeypatch,
     tmp_path,
     capsys,
 ):
+    records = [
+        completed_record(477, "Conditional Statements"),
+        completed_record(478, "Biconditional Statements"),
+        completed_record(1016, "Parametric Curves"),
+    ]
     monkeypatch.setattr(ex, "_session_cookies", lambda: [])
-    monkeypatch.setattr(ex, "completed_topic_ids", lambda *a, **kw: [477, 1016])
+    monkeypatch.setattr(ex, "completed_topic_records", lambda *a, **kw: records)
+
+    html_by_id = {
+        "477": topic_html_with_prereqs(477),
+        "478": topic_html_with_prereqs(478, 477),
+        "1016": topic_html_with_prereqs(1016),
+    }
     monkeypatch.setattr(
         ex,
         "fetch_html",
-        lambda url, cookies=None: topic_html(url.rstrip("/").split("/")[-1]),
+        lambda url, cookies=None: html_by_id[url.rstrip("/").split("/")[-1]],
     )
 
     rc = ex.main([
@@ -412,28 +582,42 @@ def test_start_end_cli_extracts_completed_topic_artifacts(
 
     assert rc == 0
     range_dir = tmp_path / "2026-06-01-to-2026-08-01"
-    assert json.loads((range_dir / "topic_ids.json").read_text()) == [477, 1016]
-    assert json.loads((range_dir / "manifest.json").read_text()) == [
-        {
-            "topic_id": 477,
-            "url": "https://mathacademy.com/topics/477",
-            "output": str(range_dir / "topic-477" / "topic-477.md"),
-            "steps": 1,
-        },
-        {
-            "topic_id": 1016,
-            "url": "https://mathacademy.com/topics/1016",
-            "output": str(range_dir / "topic-1016" / "topic-1016.md"),
-            "steps": 1,
-        },
+    assert json.loads((range_dir / "topic_ids.json").read_text()) == [
+        477,
+        478,
+        1016,
     ]
-    assert (range_dir / "topic-477" / "topic-477.md").read_text().startswith(
-        "# Topic 477\n"
+    groups = json.loads((range_dir / "groups.json").read_text())
+    assert groups["schema_version"] == 1
+    assert groups["grouping"] == "node-chain"
+    assert [group["slug"] for group in groups["groups"]] == [
+        "conditional-statements",
+        "parametric-curves",
+    ]
+    assert [group["topic_ids"] for group in groups["groups"]] == [
+        [477, 478],
+        [1016],
+    ]
+    manifest = json.loads((range_dir / "manifest.json").read_text())
+    assert groups["groups"][0]["topics"][1]["prerequisite_topic_ids"] == [477]
+    assert manifest[0]["group_slug"] == "conditional-statements"
+    assert manifest[0]["output"] == str(
+        range_dir
+        / "conditional-statements"
+        / "topic-477"
+        / "topic-477.md"
     )
-    assert (range_dir / "topic-1016" / "topic-1016.md").is_file()
+    assert (
+        range_dir
+        / "conditional-statements"
+        / "topic-478"
+        / "topic-478.md"
+    ).is_file()
+    assert (range_dir / "parametric-curves" / "topic-1016" / "topic-1016.md").is_file()
+    assert not any(path.name.startswith("group-") for path in range_dir.iterdir())
 
     captured = capsys.readouterr()
-    assert "wrote 2 completed topic(s)" in captured.err
+    assert "wrote 3 completed topic(s)" in captured.err
     assert captured.out == ""
 
 
@@ -456,3 +640,18 @@ def test_start_end_cli_requires_both_dates(capsys):
 
     assert rc == 2
     assert "--start and --end" in capsys.readouterr().err
+
+
+def test_cli_rejects_removed_group_by_option(capsys):
+    with pytest.raises(SystemExit) as exc:
+        ex.main([
+            "--start",
+            "2026-06-01",
+            "--end",
+            "2026-08-01",
+            "--group-by",
+            "none",
+        ])
+
+    assert exc.value.code == 2
+    assert "unrecognized arguments: --group-by" in capsys.readouterr().err

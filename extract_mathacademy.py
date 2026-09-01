@@ -59,9 +59,11 @@ from _client import (
     session_cookies as _session_cookies,
 )
 from _completed import completed_topic_ids as _completed_topic_ids
+from _completed import completed_topic_records as _completed_topic_records
 from _completed import extract_completed_topics as _extract_completed_topics
 from _completed import parse_completed_at as _parse_completed_at
-from _extract import clean, clean_inline, extract_steps, extract_title, node_text, slugify
+from _extract import clean, clean_inline, extract_prerequisite_topic_ids
+from _extract import extract_steps, extract_title, node_text, slugify
 from _mathml import conv_cell, mathml_to_latex, mjpage_to_latex, normalize_latex
 from _render import to_json, to_markdown
 from _writer import download_images, image_filename as _image_filename
@@ -77,6 +79,25 @@ def completed_topic_ids(
     include_review_topics: bool = False,
 ) -> list[int]:
     return _completed_topic_ids(
+        start_date,
+        end_date,
+        timezone=timezone,
+        cookies=cookies,
+        include_review_topics=include_review_topics,
+        fetch_previous_tasks_fn=fetch_previous_tasks,
+        session_cookies_fn=_session_cookies,
+    )
+
+
+def completed_topic_records(
+    start_date: dt_date,
+    end_date: dt_date,
+    *,
+    timezone: str = "America/Los_Angeles",
+    cookies=None,
+    include_review_topics: bool = False,
+):
+    return _completed_topic_records(
         start_date,
         end_date,
         timezone=timezone,
@@ -141,7 +162,7 @@ def extract_completed_topics(
         no_images=no_images,
         include_review_topics=include_review_topics,
         session_cookies_fn=_session_cookies,
-        completed_topic_ids_fn=completed_topic_ids,
+        completed_topic_records_fn=completed_topic_records,
         fetch_html_fn=fetch_html,
         write_extracted_lesson_fn=write_extracted_lesson,
         base_url=MA_BASE_URL,
