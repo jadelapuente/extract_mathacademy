@@ -46,19 +46,11 @@ def curriculum_view(course_graph: dict[str, Any]) -> dict[str, Any]:
 
 def topic_summary(
     topic: dict[str, Any],
-    curriculum: dict[str, Any],
-    *,
-    relation: str | None = None,
-    source_topic_id: Any = None,
 ) -> dict[str, Any]:
-    summary: dict[str, Any] = {
+    return {
         "id": topic.get("id"),
         "name": topic.get("name"),
     }
-    if relation is not None:
-        summary["relation"] = relation
-        summary["source_topic_id"] = source_topic_id
-    return summary
 
 
 def dedupe_preserve_order(values: Any) -> list[Any]:
@@ -71,4 +63,3 @@ def dedupe_preserve_order(values: Any) -> list[Any]:
         output.append(value)
         seen.add(key)
     return output
-

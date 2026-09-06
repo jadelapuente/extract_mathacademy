@@ -24,11 +24,18 @@ card fetching:
         {
           "id": 469,
           "name": "Solving Polynomial Inequalities",
-          "relation": "child",
-          "source_topic_id": 468
+          "relations": [
+            {
+              "relation": "child",
+              "source_topic_id": 468
+            },
+            {
+              "relation": "child",
+              "source_topic_id": 3833
+            }
+          ]
         }
-      ],
-      "missing_topic_ids": []
+      ]
     }
   ],
   "all_math_decks": [
@@ -49,8 +56,7 @@ Runtime LLM payload:
     "id": "solving-quadratic-inequalities",
     "name": "Solving Quadratic Inequalities",
     "target_topics": [],
-    "context_topics": [],
-    "missing_topic_ids": []
+    "context_topics": []
   },
   "candidate_decks": [
     {
@@ -75,15 +81,7 @@ For a single downloaded topic, use the same shape with one target topic:
           "name": "The Determinant of a 3x3 Matrix"
         }
       ],
-      "context_topics": [
-        {
-          "id": 863,
-          "name": "Introduction to the Inverse of a Matrix",
-          "relation": "next",
-          "source_topic_id": 153
-        }
-      ],
-      "missing_topic_ids": []
+      "context_topics": []
     }
   ],
   "all_math_decks": [
@@ -94,6 +92,25 @@ For a single downloaded topic, use the same shape with one target topic:
   ]
 }
 ```
+
+When an input group references topic IDs that are not present in
+`data/curriculum.json`, the CLI writes a separate diagnostic report instead of
+putting those IDs in the LLM-facing payload:
+
+```json
+{
+  "total_missing_topic_ids": 1,
+  "groups": [
+    {
+      "gap_group_id": "linear-equations",
+      "gap_group_name": "Linear Equations",
+      "missing_topic_ids": [999]
+    }
+  ]
+}
+```
+
+No missing-topic report file is written when all group topic IDs resolve.
 
 The expected LLM output should be strict JSON:
 
@@ -138,3 +155,6 @@ Guardrails:
   only from `gap_group.target_topics[*].id`.
 - Context topics can explain why a deck is relevant, but cannot authorize card
   creation.
+- Default context topics include `child` graph context and `prev` sequence
+  context. `next` sequence context is opt-in via `--include-next-context`
+  because it can pull the model toward forward material outside the gap target.

@@ -8,6 +8,7 @@ from pathlib import Path
 from extract_mathacademy.io.json_files import load_json, write_json
 from extract_mathacademy.pipeline.assess_gaps import (
     build_gap_inputs,
+    build_missing_topics_report,
     groups_doc_from_topic_ids,
 )
 
@@ -15,6 +16,7 @@ from extract_mathacademy.pipeline.assess_gaps import (
 DEFAULT_CURRICULUM_JSON = Path("data/curriculum.json")
 DEFAULT_MOCHI_DECKS_JSON = Path("data/mochi-decks.json")
 DEFAULT_OUTPUT = Path("data/mochi-gap-inputs.json")
+DEFAULT_MISSING_TOPICS_OUTPUT = Path("data/mochi-gap-missing-topics.json")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -47,6 +49,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"Output gap-inputs JSON path. Defaults to {DEFAULT_OUTPUT}.",
     )
     parser.add_argument(
+        "--missing-topics-output",
+        default=str(DEFAULT_MISSING_TOPICS_OUTPUT),
+        help=(
+            "Diagnostic JSON path for missing group topic IDs. Written only "
+            f"when missing topics exist. Defaults to {DEFAULT_MISSING_TOPICS_OUTPUT}."
+        ),
+    )
+    parser.add_argument(
         "--mochi-decks-json",
         default=None,
         help=(
@@ -65,11 +75,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help='Mochi root deck name to find when no ID is provided. Defaults to "Math".',
     )
     parser.add_argument(
-        "--include-same-subsection-context",
+        "--include-next-context",
         action="store_true",
         help=(
-            "Opt in to same-subsection topic context. These topics are always "
-            "included as context topics, never target topics."
+            "Opt in to next-topic sequence context. By default only child "
+            "and previous-topic context is included."
         ),
     )
     return parser
@@ -99,13 +109,25 @@ def run(args: argparse.Namespace) -> int:
             load_json(decks_path),
             mochi_root_deck_id=args.mochi_root_deck_id,
             mochi_root_deck_name=args.mochi_root_deck_name,
-            include_same_subsection_context=args.include_same_subsection_context,
+            include_next_context=args.include_next_context,
         )
     except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
 
     write_json(args.output, doc)
+    missing_topics_report = build_missing_topics_report(curriculum, groups_doc)
+    missing_topics_output = Path(args.missing_topics_output)
+    if missing_topics_report:
+        write_json(missing_topics_output, missing_topics_report)
+        print(
+            f"wrote {missing_topics_report['total_missing_topic_ids']} missing "
+            f"topic IDs -> {missing_topics_output}",
+            file=sys.stderr,
+        )
+    elif missing_topics_output.exists():
+        missing_topics_output.unlink()
+
     print(
         f"wrote {len(doc['gap_groups'])} gap groups and "
         f"{len(doc['all_math_decks'])} Mochi deck candidates -> {args.output}",

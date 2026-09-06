@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 
+from extract_mathacademy.cli import assess_gaps as cli
 from extract_mathacademy.pipeline.assess_gaps import (
     build_gap_groups,
     build_gap_inputs,
+    build_missing_topics_report,
     groups_doc_from_topic_ids,
     prepare_mochi_decks,
 )
@@ -65,7 +67,7 @@ def course_graph_fixture():
                 "subsection_id": 10,
                 "prev_id": 1,
                 "next_id": 5,
-                "children": [],
+                "children": [3],
                 "prerequisites": [1],
             },
             "3": {
@@ -151,7 +153,37 @@ def test_gap_groups_keep_targets_exactly_to_group_seed_topics():
 
     assert group["id"] == "linear-equations"
     assert [topic["id"] for topic in group["target_topics"]] == [1, 2, 4]
-    assert group["missing_topic_ids"] == [999]
+    assert "missing_topic_ids" not in group
+
+
+def test_missing_topic_ids_are_separate_from_gap_groups():
+    report = build_missing_topics_report(course_graph_fixture(), groups_fixture())
+
+    assert report == {
+        "total_missing_topic_ids": 1,
+        "groups": [
+            {
+                "gap_group_id": "linear-equations",
+                "gap_group_name": "Linear Equations",
+                "missing_topic_ids": [999],
+            }
+        ],
+    }
+
+
+def test_missing_topics_report_is_none_when_no_topics_are_missing():
+    groups_doc = {
+        "schema_version": 1,
+        "groups": [
+            {
+                "slug": "linear-equations",
+                "name": "Linear Equations",
+                "topic_ids": [1, 2, 4],
+            }
+        ],
+    }
+
+    assert build_missing_topics_report(course_graph_fixture(), groups_doc) is None
 
 
 def test_gap_groups_keep_topic_summaries_minimal():
@@ -169,45 +201,61 @@ def test_gap_context_topics_are_separate_from_targets():
     assert context_topics[0] == {
         "id": 3,
         "name": "Equation Word Problems",
-        "relation": "child",
-        "source_topic_id": 1,
+        "relations": [
+            {"relation": "child", "source_topic_id": 1},
+            {"relation": "child", "source_topic_id": 2},
+            {"relation": "prev", "source_topic_id": 4},
+        ],
     }
-    assert {topic["id"]: topic["relation"] for topic in context_topics} == {
-        3: "child",
-        5: "next",
-        7: "next",
+    assert {topic["id"]: topic["relations"] for topic in context_topics} == {
+        3: [
+            {"relation": "child", "source_topic_id": 1},
+            {"relation": "child", "source_topic_id": 2},
+            {"relation": "prev", "source_topic_id": 4},
+        ],
     }
     assert not {topic["id"] for topic in group["target_topics"]} & {
         topic["id"] for topic in context_topics
     }
 
 
-def test_gap_groups_do_not_include_same_subsection_or_parents_by_default():
+def test_gap_groups_do_not_include_parents_or_prerequisites():
     group = build_gap_groups(course_graph_fixture(), groups_fixture())[0]
     serialized = json.dumps(group)
 
-    assert "same_subsection" not in serialized
+    assert '"relation": "next"' not in serialized
     assert "parents" not in serialized
     assert "prerequisite" not in serialized
 
 
-def test_gap_groups_include_same_subsection_context_only_when_opted_in():
+def test_gap_groups_include_next_context_only_when_opted_in():
     group = build_gap_groups(
         course_graph_fixture(),
         groups_fixture(),
-        include_same_subsection_context=True,
+        include_next_context=True,
     )[0]
-    same_subsection = [
-        topic for topic in group["context_topics"] if topic["relation"] == "same_subsection"
-    ]
 
-    assert same_subsection == [
-        {
-            "id": 8,
-            "name": "Line Symmetry",
-            "relation": "same_subsection",
-            "source_topic_id": None,
-        }
+    assert {topic["id"]: topic["relations"] for topic in group["context_topics"]} == {
+        3: [
+            {"relation": "child", "source_topic_id": 1},
+            {"relation": "child", "source_topic_id": 2},
+            {"relation": "prev", "source_topic_id": 4},
+        ],
+        5: [{"relation": "next", "source_topic_id": 2}],
+        7: [{"relation": "next", "source_topic_id": 4}],
+    }
+
+
+def test_context_topic_keeps_multiple_relations_to_targets():
+    group = build_gap_groups(course_graph_fixture(), groups_fixture())[0]
+    equation_word_problems = next(
+        topic for topic in group["context_topics"] if topic["id"] == 3
+    )
+
+    assert equation_word_problems["relations"] == [
+        {"relation": "child", "source_topic_id": 1},
+        {"relation": "child", "source_topic_id": 2},
+        {"relation": "prev", "source_topic_id": 4},
     ]
 
 
@@ -274,6 +322,88 @@ def test_build_gap_inputs_does_not_require_or_emit_card_content():
     assert "content" not in serialized
     assert "card" not in serialized.casefold()
     assert "placements" not in serialized
+    assert "missing_topic_ids" not in serialized
+
+
+def test_cli_writes_missing_topics_report_only_when_topics_are_missing(tmp_path):
+    curriculum_path = tmp_path / "curriculum.json"
+    groups_path = tmp_path / "groups.json"
+    decks_path = tmp_path / "mochi-decks.json"
+    output_path = tmp_path / "mochi-gap-inputs.json"
+    missing_topics_path = tmp_path / "mochi-gap-missing-topics.json"
+
+    curriculum_path.write_text(json.dumps(course_graph_fixture()), encoding="utf-8")
+    groups_path.write_text(json.dumps(groups_fixture()), encoding="utf-8")
+    decks_path.write_text(json.dumps(fake_mochi_decks()), encoding="utf-8")
+
+    rc = cli.main(
+        [
+            "--curriculum",
+            str(curriculum_path),
+            "--groups",
+            str(groups_path),
+            "--mochi-decks-json",
+            str(decks_path),
+            "--output",
+            str(output_path),
+            "--missing-topics-output",
+            str(missing_topics_path),
+        ]
+    )
+
+    assert rc == 0
+    assert "missing_topic_ids" not in output_path.read_text(encoding="utf-8")
+    assert json.loads(missing_topics_path.read_text(encoding="utf-8")) == {
+        "total_missing_topic_ids": 1,
+        "groups": [
+            {
+                "gap_group_id": "linear-equations",
+                "gap_group_name": "Linear Equations",
+                "missing_topic_ids": [999],
+            }
+        ],
+    }
+
+    groups_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "groups": [
+                    {
+                        "slug": "linear-equations",
+                        "name": "Linear Equations",
+                        "topic_ids": [1, 2, 4],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rc = cli.main(
+        [
+            "--curriculum",
+            str(curriculum_path),
+            "--groups",
+            str(groups_path),
+            "--mochi-decks-json",
+            str(decks_path),
+            "--output",
+            str(output_path),
+            "--missing-topics-output",
+            str(missing_topics_path),
+        ]
+    )
+
+    assert rc == 0
+    assert not missing_topics_path.exists()
+
+
+def test_cli_missing_topics_output_defaults_to_data_path():
+    parser = cli._build_parser()
+    args = parser.parse_args(["--groups", "groups.json"])
+
+    assert args.missing_topics_output == "data/mochi-gap-missing-topics.json"
 
 
 def test_single_topic_input_uses_same_gap_group_shape():
