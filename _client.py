@@ -85,6 +85,37 @@ class MathAcademyClient:
         response.raise_for_status()
         return response.text
 
+    def fetch_json(self, path_or_url: str) -> dict[str, Any] | list[Any]:
+        """Fetch a Math Academy JSON API endpoint using the current session."""
+        import requests
+
+        url = (
+            path_or_url
+            if path_or_url.startswith(("http://", "https://"))
+            else f"{self.base_url}/{path_or_url.lstrip('/')}"
+        )
+        response = requests.get(
+            url,
+            cookies=self.cookies,
+            headers={"User-Agent": USER_AGENT, "Accept": "application/json"},
+            allow_redirects=True,
+            timeout=30,
+        )
+        _raise_if_login_page(response)
+        response.raise_for_status()
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise InvalidResponseError(
+                "Math Academy did not return JSON. Your session may be expired."
+            ) from exc
+        if isinstance(data, dict) and data.get("sessionExpired") is True:
+            raise ExpiredSessionError(
+                "Math Academy reported that your session has expired. "
+                "Re-open mathacademy.com in your browser to refresh it."
+            )
+        return data
+
     def fetch_previous_tasks(self, before: datetime) -> list[dict[str, Any]]:
         """Fetch completed tasks older than `before`.
 

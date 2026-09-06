@@ -87,6 +87,55 @@ def test_fetch_previous_tasks_builds_cursor_url_and_returns_list(monkeypatch):
     }
 
 
+def test_fetch_json_builds_api_url_and_returns_json(monkeypatch):
+    calls = []
+    response = FakeResponse(
+        url="https://mathacademy.com/api/courses/113/content",
+        text="{}",
+        json_data={"result": True},
+    )
+
+    def fake_get(*args, **kwargs):
+        calls.append((args, kwargs))
+        return response
+
+    monkeypatch.setattr("requests.get", fake_get)
+
+    data = MathAcademyClient(cookies=["session"]).fetch_json(
+        "/api/courses/113/content"
+    )
+
+    assert data == {"result": True}
+    assert response.raise_for_status_called
+    assert calls == [
+        (("https://mathacademy.com/api/courses/113/content",), {
+            "cookies": ["session"],
+            "headers": {
+                "User-Agent": "Mozilla/5.0",
+                "Accept": "application/json",
+            },
+            "allow_redirects": True,
+            "timeout": 30,
+        })
+    ]
+
+
+def test_fetch_json_rejects_session_expired_response(monkeypatch):
+    monkeypatch.setattr(
+        "requests.get",
+        lambda *a, **kw: FakeResponse(
+            url="https://mathacademy.com/api/courses/113/content",
+            text='{"sessionExpired":true}',
+            json_data={"sessionExpired": True},
+        ),
+    )
+
+    with pytest.raises(ExpiredSessionError, match="session has expired"):
+        MathAcademyClient(cookies=["session"]).fetch_json(
+            "/api/courses/113/content"
+        )
+
+
 def test_client_fetch_html_rejects_login_redirect(monkeypatch):
     monkeypatch.setattr(
         "requests.get",
