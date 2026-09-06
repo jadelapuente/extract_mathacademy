@@ -10,7 +10,7 @@ from _client import MathAcademyError
 from _course_graph import build_curriculum_knowledge_graph_from_api
 
 
-DEFAULT_COURSE_IDS = [113, 111, 136, 76]
+DEFAULT_COURSE_IDS = [113, 111, 136, 76, 43, 105, 106]
 DEFAULT_OUTPUT = Path("data/curriculum.json")
 
 

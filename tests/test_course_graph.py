@@ -194,6 +194,14 @@ def test_course_graph_cli_writes_json(monkeypatch, tmp_path):
     assert "parents" not in written["topics_by_id"]["545"]
 
 
+def test_course_graph_cli_default_course_ids_include_full_curriculum():
+    parser = cli._build_parser()
+    args = parser.parse_args([])
+
+    assert args.course_ids == [113, 111, 136, 76, 43, 105, 106]
+    assert args.output == "data/curriculum.json"
+
+
 def test_build_curriculum_knowledge_graph_merges_courses_and_topics():
     first = build_course_knowledge_graph(
         113,
