@@ -17,6 +17,7 @@ _IMG_EXT = {
     "image/svg+xml": ".svg",
     "image/webp": ".webp",
 }
+_MARKDOWN_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
 
 def image_filename(src: str, content_type: str) -> str:
@@ -55,6 +56,23 @@ def download_images(srcs, base_url: str, out_dir: Path, cookies) -> dict[str, st
 DownloadImages = Callable[[list[str], str, Path, Any], dict[str, str]]
 
 
+def markdown_image_sources(markdown: str) -> list[str]:
+    return _MARKDOWN_IMAGE_RE.findall(markdown)
+
+
+def rewrite_markdown_image_sources(
+    markdown: str,
+    mapping: dict[str, str],
+) -> str:
+    def rewrite(match: re.Match[str]) -> str:
+        src = match.group(1)
+        if src not in mapping:
+            return match.group(0)
+        return match.group(0).replace(f"({src})", f"({mapping[src]})")
+
+    return _MARKDOWN_IMAGE_RE.sub(rewrite, markdown)
+
+
 def write_extracted_lesson(
     html: str,
     *,
@@ -87,11 +105,10 @@ def write_extracted_lesson(
 
     # Download lesson images into the same directory and rewrite references.
     if source_url and not no_images:
-        srcs = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", text)
+        srcs = markdown_image_sources(text)
         if srcs:
             mapping = download_images_fn(srcs, source_url, out_path.parent, cookies)
-            for src, fname in mapping.items():
-                text = text.replace(f"]({src})", f"]({fname})")
+            text = rewrite_markdown_image_sources(text, mapping)
             print(f"downloaded {len(mapping)} image(s) -> {out_path.parent}",
                   file=stderr)
 

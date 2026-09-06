@@ -11,9 +11,29 @@ from pathlib import Path
 import pytest
 from bs4 import BeautifulSoup
 
-import extract_mathacademy as ex
-from _completed import CompletedTopicRecord
+import extract_mathacademy as cli
+from _completed import (
+    CompletedTopicRecord,
+    build_completed_topic_plan,
+    completed_topic_ids,
+    completed_topic_records,
+    extract_relationships,
+)
+from _extract import (
+    clean_inline,
+    extract_prerequisite_topic_ids,
+    extract_steps,
+    extract_title,
+    slugify,
+)
 from _grouping import group_completed_topics
+from _mathml import mathml_to_latex, mjpage_to_latex, normalize_latex
+from _render import to_json, to_markdown
+from _writer import (
+    markdown_image_sources,
+    rewrite_markdown_image_sources,
+    write_extracted_lesson,
+)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 TEST_HTML = REPO_ROOT / "test.html"
@@ -36,7 +56,7 @@ def mathml(snippet: str):
 
 
 def m2l(snippet: str) -> str:
-    return ex.normalize_latex(ex.mathml_to_latex(mathml(snippet)))
+    return normalize_latex(mathml_to_latex(mathml(snippet)))
 
 
 def make_span(title_inner: str, block: bool = False):
@@ -112,11 +132,11 @@ def test_delimiters_open_close():
 # --------------------------------------------------------------------------- #
 
 def test_normalize_collapses_whitespace():
-    assert ex.normalize_latex("a^{2}\n  -\n  b") == "a^{2} - b"
+    assert normalize_latex("a^{2}\n  -\n  b") == "a^{2} - b"
 
 
 def test_clean_inline_single_line():
-    assert ex.clean_inline("Factoring a Sum of\n  Squares") == "Factoring a Sum of Squares"
+    assert clean_inline("Factoring a Sum of\n  Squares") == "Factoring a Sum of Squares"
 
 
 # --------------------------------------------------------------------------- #
@@ -125,22 +145,22 @@ def test_clean_inline_single_line():
 
 def test_mjpage_v3_mathml_inline():
     span = make_span("<math><msup><mi>x</mi><mn>2</mn></msup></math>")
-    assert ex.mjpage_to_latex(span) == "$x^{2}$"
+    assert mjpage_to_latex(span) == "$x^{2}$"
 
 
 def test_mjpage_v3_block():
     span = make_span("<math><msup><mi>x</mi><mn>2</mn></msup></math>", block=True)
-    assert ex.mjpage_to_latex(span) == "\n$$ x^{2} $$\n"
+    assert mjpage_to_latex(span) == "\n$$ x^{2} $$\n"
 
 
 def test_mjpage_v2_raw_latex_is_normalized():
     span = make_span("\n      a^2 - b^2 = (a+b)(a-b).\n    ")
-    assert ex.mjpage_to_latex(span) == "$a^2 - b^2 = (a+b)(a-b).$"
+    assert mjpage_to_latex(span) == "$a^2 - b^2 = (a+b)(a-b).$"
 
 
 def test_mjpage_missing_svg_is_empty():
     span = BeautifulSoup('<span class="mjpage"></span>', "html.parser").find("span")
-    assert ex.mjpage_to_latex(span) == ""
+    assert mjpage_to_latex(span) == ""
 
 
 # --------------------------------------------------------------------------- #
@@ -149,7 +169,7 @@ def test_mjpage_missing_svg_is_empty():
 
 @pytest.fixture(scope="module")
 def steps():
-    return ex.extract_steps(TEST_HTML.read_text(encoding="utf-8"))
+    return extract_steps(TEST_HTML.read_text(encoding="utf-8"))
 
 
 def test_step_count_and_types(steps):
@@ -182,26 +202,26 @@ def test_extracted_steps_are_typed_mapping_compatible_objects(steps):
 
 def test_no_newlines_inside_block_math(steps):
     """The core regression guard: block formulas must stay on one line."""
-    md = ex.to_markdown(steps)
+    md = to_markdown(steps)
     for formula in re.findall(r"\$\$(.+?)\$\$", md, flags=re.DOTALL):
         assert "\n" not in formula, f"newline leaked into math: {formula!r}"
 
 
 def test_markdown_starts_with_first_step(steps):
-    md = ex.to_markdown(steps)
+    md = to_markdown(steps)
     assert md.startswith("## [tutorial] Introduction")
 
 
 def test_json_is_a_bare_step_array(steps):
-    doc = json.loads(ex.to_json(steps))
+    doc = json.loads(to_json(steps))
     assert isinstance(doc, list)
     assert len(doc) == 5
     assert doc[0]["id"] == "20991"
 
 
 def test_test_html_output_hashes_are_stable(steps):
-    markdown = ex.to_markdown(steps)
-    json_text = ex.to_json(steps)
+    markdown = to_markdown(steps)
+    json_text = to_json(steps)
 
     assert (
         sha256(markdown.encode("utf-8")).hexdigest()
@@ -220,7 +240,7 @@ def test_test_html_output_hashes_are_stable(steps):
 def test_cli_writes_markdown_file(tmp_path):
     src = tmp_path / "lesson.html"
     src.write_text(TEST_HTML.read_text(encoding="utf-8"), encoding="utf-8")
-    rc = ex.main([str(src), "--out-dir", str(tmp_path)])
+    rc = cli.main([str(src), "--out-dir", str(tmp_path)])
     assert rc == 0
     # No #topicName in test.html, so the name falls back to the input stem.
     assert (tmp_path / "lesson" / "lesson.md").is_file()
@@ -229,7 +249,7 @@ def test_cli_writes_markdown_file(tmp_path):
 def test_cli_writes_json_file(tmp_path):
     src = tmp_path / "lesson.html"
     src.write_text(TEST_HTML.read_text(encoding="utf-8"), encoding="utf-8")
-    rc = ex.main([str(src), "--format", "json", "--out-dir", str(tmp_path)])
+    rc = cli.main([str(src), "--format", "json", "--out-dir", str(tmp_path)])
     assert rc == 0
     assert (tmp_path / "lesson" / "lesson.json").is_file()
 
@@ -238,12 +258,12 @@ def test_cli_explicit_output_path(tmp_path):
     src = tmp_path / "lesson.html"
     src.write_text(TEST_HTML.read_text(encoding="utf-8"), encoding="utf-8")
     out = tmp_path / "custom.md"
-    rc = ex.main([str(src), "-o", str(out)])
+    rc = cli.main([str(src), "-o", str(out)])
     assert rc == 0
     assert out.is_file()
 
 
-def test_write_extracted_lesson_downloads_images_next_to_output(monkeypatch, tmp_path):
+def test_write_extracted_lesson_downloads_images_next_to_output(tmp_path):
     html = """
     <html>
       <body>
@@ -263,15 +283,14 @@ def test_write_extracted_lesson_downloads_images_next_to_output(monkeypatch, tmp
         (out_dir / "hash.png").write_bytes(b"png")
         return {"/graphics/hash": "hash.png"}
 
-    monkeypatch.setattr(ex, "download_images", fake_download_images)
-
-    out_path, step_count = ex.write_extracted_lesson(
+    out_path, step_count = write_extracted_lesson(
         html,
         fallback_name="fallback",
         fmt="markdown",
         out_dir=tmp_path,
         source_url="https://mathacademy.com/topics/1",
         cookies=["session"],
+        download_images_fn=fake_download_images,
     )
 
     assert step_count == 1
@@ -281,8 +300,32 @@ def test_write_extracted_lesson_downloads_images_next_to_output(monkeypatch, tmp
     assert "![diagram](hash.png)" in out_path.read_text(encoding="utf-8")
 
 
+def test_markdown_image_helpers_only_rewrite_images():
+    markdown = (
+        "![first](/graphics/hash)\n"
+        "[normal](/graphics/hash)\n"
+        "![second](/graphics/hash)\n"
+        "![other](/graphics/other)"
+    )
+
+    assert markdown_image_sources(markdown) == [
+        "/graphics/hash",
+        "/graphics/hash",
+        "/graphics/other",
+    ]
+    assert rewrite_markdown_image_sources(
+        markdown,
+        {"/graphics/hash": "hash.png"},
+    ) == (
+        "![first](hash.png)\n"
+        "[normal](/graphics/hash)\n"
+        "![second](hash.png)\n"
+        "![other](/graphics/other)"
+    )
+
+
 def test_cli_missing_file_returns_2(tmp_path):
-    assert ex.main([str(tmp_path / "nope.html")]) == 2
+    assert cli.main([str(tmp_path / "nope.html")]) == 2
 
 
 # --------------------------------------------------------------------------- #
@@ -290,26 +333,54 @@ def test_cli_missing_file_returns_2(tmp_path):
 # --------------------------------------------------------------------------- #
 
 def test_slugify():
-    assert ex.slugify("Inverses of Quadratic Functions") == \
+    assert slugify("Inverses of Quadratic Functions") == \
         "inverses-of-quadratic-functions"
-    assert ex.slugify("  Multi   space & punct!  ") == "multi-space-punct"
-    assert ex.slugify("") == "lesson"
+    assert slugify("  Multi   space & punct!  ") == "multi-space-punct"
+    assert slugify("") == "lesson"
 
 
 def test_extract_title_present():
     html = '<div id="topicName">Inverses of Quadratic Functions</div>'
-    assert ex.extract_title(html) == "Inverses of Quadratic Functions"
+    assert extract_title(html) == "Inverses of Quadratic Functions"
 
 
 def test_extract_title_absent():
-    assert ex.extract_title(TEST_HTML.read_text(encoding="utf-8")) is None
+    assert extract_title(TEST_HTML.read_text(encoding="utf-8")) is None
 
 
 def test_markdown_includes_title_heading(steps):
-    md = ex.to_markdown(steps, title="My Lesson")
+    md = to_markdown(steps, title="My Lesson")
     assert md.startswith("# My Lesson\n")
     # Without a title, output is unchanged (no leading H1).
-    assert not ex.to_markdown(steps).startswith("# ")
+    assert not to_markdown(steps).startswith("# ")
+
+
+def test_to_markdown_accepts_legacy_mapping_steps():
+    md = to_markdown([
+        {
+            "id": "1",
+            "type": "tutorial",
+            "title": "Intro",
+            "body": "Body",
+        },
+        {
+            "id": "2",
+            "type": "example",
+            "title": "Example",
+            "question": "Question?",
+            "explanation": "Explanation.",
+        },
+    ])
+
+    assert md == (
+        "## [tutorial] Intro\n\n"
+        "Body\n\n"
+        "## [example] Example\n\n"
+        "**Question**\n\n"
+        "Question?\n\n"
+        "**Explanation**\n\n"
+        "Explanation.\n"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -325,7 +396,7 @@ def completed_task(task_id, task_type, topic_id, completed):
     }
 
 
-def test_completed_topic_ids_pages_and_deduplicates(monkeypatch):
+def test_completed_topic_ids_pages_and_deduplicates():
     pages = [
         [
             completed_task(1, "Lesson", 10, "2026-07-05T11:16:14.000Z"),
@@ -343,19 +414,18 @@ def test_completed_topic_ids_pages_and_deduplicates(monkeypatch):
         calls.append(before)
         return pages[len(calls) - 1]
 
-    monkeypatch.setattr(ex, "fetch_previous_tasks", fake_fetch_previous_tasks)
-
-    ids = ex.completed_topic_ids(
+    ids = completed_topic_ids(
         date(2026, 6, 1),
         date(2026, 8, 1),
         cookies=[],
+        fetch_previous_tasks_fn=fake_fetch_previous_tasks,
     )
 
     assert ids == [10, 20]
     assert len(calls) == 2
 
 
-def test_completed_topic_ids_can_include_review_topics(monkeypatch):
+def test_completed_topic_ids_can_include_review_topics():
     def fake_fetch_previous_tasks(before, cookies=None):
         return [
             completed_task(1, "Lesson", 10, "2026-07-05T11:16:14.000Z"),
@@ -363,19 +433,18 @@ def test_completed_topic_ids_can_include_review_topics(monkeypatch):
             completed_task(3, "Lesson", 20, "2026-06-01T06:59:59.000Z"),
         ]
 
-    monkeypatch.setattr(ex, "fetch_previous_tasks", fake_fetch_previous_tasks)
-
-    ids = ex.completed_topic_ids(
+    ids = completed_topic_ids(
         date(2026, 6, 1),
         date(2026, 8, 1),
         cookies=[],
         include_review_topics=True,
+        fetch_previous_tasks_fn=fake_fetch_previous_tasks,
     )
 
     assert ids == [10, 99]
 
 
-def test_completed_topic_records_preserve_relationship_metadata(monkeypatch):
+def test_completed_topic_records_preserve_relationship_metadata():
     def fake_fetch_previous_tasks(before, cookies=None):
         return [
             {
@@ -395,12 +464,11 @@ def test_completed_topic_records_preserve_relationship_metadata(monkeypatch):
             },
         ]
 
-    monkeypatch.setattr(ex, "fetch_previous_tasks", fake_fetch_previous_tasks)
-
-    records = ex.completed_topic_records(
+    records = completed_topic_records(
         date(2026, 6, 1),
         date(2026, 8, 1),
         cookies=[],
+        fetch_previous_tasks_fn=fake_fetch_previous_tasks,
     )
 
     assert [record.topic_id for record in records] == [10, 20]
@@ -409,6 +477,34 @@ def test_completed_topic_records_preserve_relationship_metadata(monkeypatch):
     assert records[0].next_learning_node_id == 102
     assert records[1].learning_node_id == 102
     assert records[1].previous_learning_node_id == 101
+
+
+def test_extract_relationships_reads_task_and_topic_variants():
+    direct_task_relationships = extract_relationships({
+        "nodeId": 101,
+        "previousNodeId": 100,
+        "nextNodeId": 102,
+        "topic": {"id": 10},
+    })
+
+    assert direct_task_relationships.learning_node_id == 101
+    assert direct_task_relationships.previous_learning_node_id == 100
+    assert direct_task_relationships.next_learning_node_id == 102
+
+    nested_topic_relationships = extract_relationships({
+        "topic": {
+            "id": 20,
+            "learningNode": {"id": "node-20"},
+            "node": {
+                "previous": {"id": "node-19"},
+                "next": {"id": "node-21"},
+            },
+        },
+    })
+
+    assert nested_topic_relationships.learning_node_id == "node-20"
+    assert nested_topic_relationships.previous_learning_node_id == "node-19"
+    assert nested_topic_relationships.next_learning_node_id == "node-21"
 
 
 def completed_record(
@@ -489,7 +585,7 @@ def test_extract_prerequisite_topic_ids_from_topic_html():
     </div>
     """
 
-    assert ex.extract_prerequisite_topic_ids(html) == [246, 247]
+    assert extract_prerequisite_topic_ids(html) == [246, 247]
 
 
 def test_group_completed_topics_uses_prerequisite_topic_edges():
@@ -505,6 +601,32 @@ def test_group_completed_topics_uses_prerequisite_topic_edges():
         [246, 248],
         [247],
     ]
+
+
+def test_build_completed_topic_plan_is_side_effect_free(tmp_path):
+    range_dir = tmp_path / "2026-06-01-to-2026-08-01"
+    records = [
+        completed_record(248, "Biconditional Statements", prerequisite_topic_ids=[246]),
+        completed_record(246, "Conditional Statements"),
+        completed_record(247, "Logical Equivalence"),
+    ]
+    topic_htmls = {record.topic_id: topic_html(record.topic_id) for record in records}
+
+    plan = build_completed_topic_plan(
+        records,
+        range_dir=range_dir,
+        topic_htmls=topic_htmls,
+        base_url="https://example.test",
+    )
+
+    assert plan.range_dir == range_dir
+    assert plan.topic_ids == [248, 246, 247]
+    assert [item.record.topic_id for item in plan.write_items] == [246, 248, 247]
+    assert plan.write_items[0].group_slug == "conditional-statements"
+    assert plan.write_items[0].url == "https://example.test/topics/246"
+    assert plan.write_items[0].html == topic_htmls[246]
+    assert plan.groups_doc["groups"][0]["topic_ids"] == [246, 248]
+    assert not range_dir.exists()
 
 
 def topic_html(topic_id):
@@ -556,8 +678,8 @@ def test_start_end_cli_extracts_grouped_completed_topic_artifacts(
         completed_record(478, "Biconditional Statements"),
         completed_record(1016, "Parametric Curves"),
     ]
-    monkeypatch.setattr(ex, "_session_cookies", lambda: [])
-    monkeypatch.setattr(ex, "completed_topic_records", lambda *a, **kw: records)
+    monkeypatch.setattr(cli, "_session_cookies", lambda: [])
+    monkeypatch.setattr(cli, "completed_topic_records", lambda *a, **kw: records)
 
     html_by_id = {
         "477": topic_html_with_prereqs(477),
@@ -565,12 +687,12 @@ def test_start_end_cli_extracts_grouped_completed_topic_artifacts(
         "1016": topic_html_with_prereqs(1016),
     }
     monkeypatch.setattr(
-        ex,
+        cli,
         "fetch_html",
         lambda url, cookies=None: html_by_id[url.rstrip("/").split("/")[-1]],
     )
 
-    rc = ex.main([
+    rc = cli.main([
         "--start",
         "2026-06-01",
         "--end",
@@ -622,7 +744,7 @@ def test_start_end_cli_extracts_grouped_completed_topic_artifacts(
 
 
 def test_start_end_cli_rejects_output_file(tmp_path, capsys):
-    rc = ex.main([
+    rc = cli.main([
         "--start",
         "2026-06-01",
         "--end",
@@ -636,7 +758,7 @@ def test_start_end_cli_rejects_output_file(tmp_path, capsys):
 
 
 def test_start_end_cli_requires_both_dates(capsys):
-    rc = ex.main(["--start", "2026-06-01"])
+    rc = cli.main(["--start", "2026-06-01"])
 
     assert rc == 2
     assert "--start and --end" in capsys.readouterr().err
@@ -644,7 +766,7 @@ def test_start_end_cli_requires_both_dates(capsys):
 
 def test_cli_rejects_removed_group_by_option(capsys):
     with pytest.raises(SystemExit) as exc:
-        ex.main([
+        cli.main([
             "--start",
             "2026-06-01",
             "--end",

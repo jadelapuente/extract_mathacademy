@@ -10,30 +10,49 @@ from _model import ExampleStep, LessonStep, TutorialStep, step_to_dict
 # Rendering                                                                   #
 # --------------------------------------------------------------------------- #
 
+def _coerce_step(step: LessonStep | Mapping[str, Any]) -> LessonStep:
+    if isinstance(step, (TutorialStep, ExampleStep)):
+        return step
+    if "body" in step:
+        return TutorialStep(
+            id=step.get("id"),
+            type=step["type"],
+            title=step["title"],
+            body=step["body"],
+        )
+    return ExampleStep(
+        id=step.get("id"),
+        type=step["type"],
+        title=step["title"],
+        question=step.get("question") or "",
+        explanation=step.get("explanation") or "",
+    )
+
+
+def _render_step_markdown(step: LessonStep) -> list[str]:
+    out = [f"## [{step.type}] {step.title}".rstrip()]
+    if isinstance(step, TutorialStep):
+        out.append(step.body)
+        return out
+
+    out.extend(
+        section
+        for section in (
+            "**Question**\n\n" + step.question if step.question else "",
+            "**Explanation**\n\n" + step.explanation if step.explanation else "",
+        )
+        if section
+    )
+    return out
+
+
 def to_markdown(
     steps: list[LessonStep] | list[Mapping[str, Any]],
     title: str | None = None,
 ) -> str:
     out = [f"# {title}"] if title else []
-    for s in steps:
-        if isinstance(s, TutorialStep):
-            out.append(f"## [{s.type}] {s.title}".rstrip())
-            out.append(s.body)
-        elif isinstance(s, ExampleStep):
-            out.append(f"## [{s.type}] {s.title}".rstrip())
-            if s.question:
-                out.append("**Question**\n\n" + s.question)
-            if s.explanation:
-                out.append("**Explanation**\n\n" + s.explanation)
-        else:
-            out.append(f"## [{s['type']}] {s['title']}".rstrip())
-            if "body" in s:
-                out.append(s["body"])
-                continue
-            if s.get("question"):
-                out.append("**Question**\n\n" + s["question"])
-            if s.get("explanation"):
-                out.append("**Explanation**\n\n" + s["explanation"])
+    for step in steps:
+        out.extend(_render_step_markdown(_coerce_step(step)))
     return "\n\n".join(x for x in out if x).strip() + "\n"
 
 
