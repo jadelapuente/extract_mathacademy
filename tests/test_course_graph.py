@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 
-import extract_course_graph as cli
-from _course_graph import build_course_knowledge_graph, build_curriculum_knowledge_graph
+from extract_mathacademy.cli import extract_course_graph as cli
+from extract_mathacademy.mathacademy.course_graph import build_course_knowledge_graph, build_curriculum_knowledge_graph
 
 
 def sample_content():

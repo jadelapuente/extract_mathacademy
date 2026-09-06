@@ -3,8 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from _completed import CompletedTopicRecord
-from _extract import slugify
+from extract_mathacademy.mathacademy.completed_topics import CompletedTopicRecord
+from extract_mathacademy.mathacademy.lesson_extract import slugify
 
 
 @dataclass(frozen=True)

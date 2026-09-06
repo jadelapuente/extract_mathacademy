@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, TextIO
 from zoneinfo import ZoneInfo
 
-from _client import MA_BASE_URL, fetch_html, fetch_previous_tasks, session_cookies
-from _extract import extract_prerequisite_topic_ids, extract_title
-from _writer import write_extracted_lesson
+from extract_mathacademy.mathacademy.client import MA_BASE_URL, fetch_html, fetch_previous_tasks, session_cookies
+from extract_mathacademy.mathacademy.lesson_extract import extract_prerequisite_topic_ids, extract_title
+from extract_mathacademy.io.lesson_writer import write_extracted_lesson
 
 NodeId = str | int | None
 RelationshipPath = tuple[str, ...]
@@ -343,7 +343,7 @@ def build_completed_topic_plan(
     topic_htmls: dict[int, str],
     base_url: str = MA_BASE_URL,
 ) -> CompletedTopicExtractionPlan:
-    from _grouping import group_completed_topics
+    from extract_mathacademy.curriculum.grouping import group_completed_topics
 
     topic_ids = [record.topic_id for record in records]
     groups = group_completed_topics(records)

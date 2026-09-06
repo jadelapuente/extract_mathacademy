@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any, Callable, TextIO
 from urllib.parse import urljoin, urlparse
 
-from _extract import extract_steps, extract_title, slugify
-from _render import to_json, to_markdown
+from extract_mathacademy.mathacademy.lesson_extract import extract_steps, extract_title, slugify
+from extract_mathacademy.mathacademy.render import to_json, to_markdown
 
 # Content-Type -> file extension for the image formats Math Academy serves.
 _IMG_EXT = {

@@ -4,7 +4,7 @@ from copy import deepcopy
 from collections import defaultdict
 from typing import Any
 
-from _client import InvalidResponseError, MathAcademyClient
+from extract_mathacademy.mathacademy.client import InvalidResponseError, MathAcademyClient
 
 
 def fetch_course_content(

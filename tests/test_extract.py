@@ -11,25 +11,25 @@ from pathlib import Path
 import pytest
 from bs4 import BeautifulSoup
 
-import extract_mathacademy as cli
-from _completed import (
+from extract_mathacademy.cli import extract_lesson as cli
+from extract_mathacademy.mathacademy.completed_topics import (
     CompletedTopicRecord,
     build_completed_topic_plan,
     completed_topic_ids,
     completed_topic_records,
     extract_relationships,
 )
-from _extract import (
+from extract_mathacademy.mathacademy.lesson_extract import (
     clean_inline,
     extract_prerequisite_topic_ids,
     extract_steps,
     extract_title,
     slugify,
 )
-from _grouping import group_completed_topics
-from _mathml import mathml_to_latex, mjpage_to_latex, normalize_latex
-from _render import to_json, to_markdown
-from _writer import (
+from extract_mathacademy.curriculum.grouping import group_completed_topics
+from extract_mathacademy.mathacademy.mathml import mathml_to_latex, mjpage_to_latex, normalize_latex
+from extract_mathacademy.mathacademy.render import to_json, to_markdown
+from extract_mathacademy.io.lesson_writer import (
     markdown_image_sources,
     rewrite_markdown_image_sources,
     write_extracted_lesson,

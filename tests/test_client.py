@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from _client import (
+from extract_mathacademy.mathacademy.client import (
     ExpiredSessionError,
     InvalidResponseError,
     MathAcademyClient,

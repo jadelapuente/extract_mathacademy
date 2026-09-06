@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from _mochi_gap_inputs import (
+from extract_mathacademy.pipeline.assess_gaps import (
     build_gap_groups,
     build_gap_inputs,
     groups_doc_from_topic_ids,
@@ -154,21 +154,12 @@ def test_gap_groups_keep_targets_exactly_to_group_seed_topics():
     assert group["missing_topic_ids"] == [999]
 
 
-def test_gap_groups_find_section_and_subsection_names_in_placements():
+def test_gap_groups_keep_topic_summaries_minimal():
     topic = build_gap_groups(course_graph_fixture(), groups_fixture())[0][
         "target_topics"
     ][0]
 
-    assert topic["placements"] == [
-        {
-            "course_id": 113,
-            "course_name": "Foundations",
-            "section_id": 100,
-            "section_name": "Algebra",
-            "subsection_id": 10,
-            "subsection_name": "Linear Equations",
-        }
-    ]
+    assert topic == {"id": 1, "name": "Solving Equations"}
 
 
 def test_gap_context_topics_are_separate_from_targets():
@@ -178,16 +169,6 @@ def test_gap_context_topics_are_separate_from_targets():
     assert context_topics[0] == {
         "id": 3,
         "name": "Equation Word Problems",
-        "placements": [
-            {
-                "course_id": 113,
-                "course_name": "Foundations",
-                "section_id": 100,
-                "section_name": "Algebra",
-                "subsection_id": 10,
-                "subsection_name": "Linear Equations",
-            }
-        ],
         "relation": "child",
         "source_topic_id": 1,
     }
@@ -224,16 +205,6 @@ def test_gap_groups_include_same_subsection_context_only_when_opted_in():
         {
             "id": 8,
             "name": "Line Symmetry",
-            "placements": [
-                {
-                    "course_id": 113,
-                    "course_name": "Foundations",
-                    "section_id": 100,
-                    "section_name": "Algebra",
-                    "subsection_id": 10,
-                    "subsection_name": "Linear Equations",
-                }
-            ],
             "relation": "same_subsection",
             "source_topic_id": None,
         }
@@ -257,13 +228,13 @@ def test_prepare_mochi_decks_finds_root_by_name_and_collects_descendants():
     decks = prepare_mochi_decks(fake_mochi_decks())
 
     assert [deck["id"] for deck in decks] == ["math", "alg", "lin", "calc"]
-    assert [deck["path"] for deck in decks] == [
+    assert [deck["name"] for deck in decks] == [
         "Math",
         "Math / Algebra",
         "Math / Algebra / Linear Equations",
         "Math / Calculus",
     ]
-    assert set(decks[0]) == {"id", "name", "parent_id", "path"}
+    assert set(decks[0]) == {"id", "name"}
 
 
 def test_prepare_mochi_decks_finds_root_by_id_and_excludes_non_math_decks():
@@ -274,22 +245,35 @@ def test_prepare_mochi_decks_finds_root_by_id_and_excludes_non_math_decks():
     )
 
     assert [deck["id"] for deck in decks] == ["other", "py"]
-    assert decks[1]["path"] == "Programming / Python"
+    assert decks[1]["name"] == "Programming / Python"
 
 
 def test_build_gap_inputs_does_not_require_or_emit_card_content():
     doc = build_gap_inputs(course_graph_fixture(), groups_fixture(), fake_mochi_decks())
     serialized = json.dumps(doc)
 
-    assert set(doc) == {"gap_groups", "mochi_decks", "llm_deck_judging_units"}
-    assert doc["llm_deck_judging_units"] == [
+    assert set(doc) == {"gap_groups", "all_math_decks"}
+    assert doc["all_math_decks"] == [
         {
-            "gap_group_id": "linear-equations",
-            "candidate_deck_ids": ["math", "alg", "lin", "calc"],
-        }
+            "id": "math",
+            "name": "Math",
+        },
+        {
+            "id": "alg",
+            "name": "Math / Algebra",
+        },
+        {
+            "id": "lin",
+            "name": "Math / Algebra / Linear Equations",
+        },
+        {
+            "id": "calc",
+            "name": "Math / Calculus",
+        },
     ]
     assert "content" not in serialized
     assert "card" not in serialized.casefold()
+    assert "placements" not in serialized
 
 
 def test_single_topic_input_uses_same_gap_group_shape():
@@ -305,4 +289,3 @@ def test_single_topic_input_uses_same_gap_group_shape():
     ]
     assert doc["gap_groups"][0]["id"] == "topic-2"
     assert [topic["id"] for topic in doc["gap_groups"][0]["target_topics"]] == [2]
-    assert doc["llm_deck_judging_units"][0]["gap_group_id"] == "topic-2"

@@ -5,8 +5,8 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, NavigableString, Tag
 
-from _model import ExampleStep, LessonStep, TutorialStep
-from _mathml import mjpage_to_latex
+from extract_mathacademy.mathacademy.models import ExampleStep, LessonStep, TutorialStep
+from extract_mathacademy.mathacademy.mathml import mjpage_to_latex
 
 
 # --------------------------------------------------------------------------- #
