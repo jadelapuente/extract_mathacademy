@@ -61,36 +61,6 @@ def topic_summary(
     return summary
 
 
-def placement_summaries(
-    topic: dict[str, Any],
-    curriculum: dict[str, Any],
-) -> list[dict[str, Any]]:
-    courses_by_id = curriculum["courses_by_id"]
-    section_by_id = curriculum["section_by_id"]
-    subsections_by_id = curriculum["subsections_by_id"]
-    placements = topic.get("placements") or [
-        {
-            "course_id": topic.get("course_id") or _single_course_id(curriculum),
-            "section_id": topic.get("section_id"),
-            "subsection_id": topic.get("subsection_id"),
-        }
-    ]
-    return [
-        {
-            "course_id": placement.get("course_id"),
-            "course_name": _name_by_id(courses_by_id, placement.get("course_id")),
-            "section_id": placement.get("section_id"),
-            "section_name": _name_by_id(section_by_id, placement.get("section_id")),
-            "subsection_id": placement.get("subsection_id"),
-            "subsection_name": _name_by_id(
-                subsections_by_id,
-                placement.get("subsection_id"),
-            ),
-        }
-        for placement in placements
-    ]
-
-
 def dedupe_preserve_order(values: Any) -> list[Any]:
     output: list[Any] = []
     seen: set[str] = set()
@@ -102,13 +72,3 @@ def dedupe_preserve_order(values: Any) -> list[Any]:
         seen.add(key)
     return output
 
-
-def _name_by_id(items_by_id: dict[str, dict[str, Any]], item_id: Any) -> str | None:
-    item = items_by_id.get(str(item_id))
-    name = item.get("name") if item else None
-    return name if isinstance(name, str) else None
-
-
-def _single_course_id(curriculum: dict[str, Any]) -> Any:
-    course_ids = curriculum["course_ids"]
-    return course_ids[0] if len(course_ids) == 1 else None
